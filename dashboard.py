@@ -27,26 +27,159 @@ def _base_layout(**kwargs) -> dict:
     return base
 
 
-# ── 1. Marks comparison bar chart ─────────────────────────────────────────────
+# ── 1. Smart subject chart — auto-selects best viz based on subject count ──────
 def marks_bar_chart(meta: dict) -> go.Figure:
-    df = meta["df"]
+    """
+    ≤ 8  subjects  → horizontal bar chart (clean, readable)
+    9-20 subjects  → horizontal bar chart with shortened labels
+    > 20 subjects  → Top 10 only horizontal bar (too many to show all)
+    """
+    df    = meta["df"]
     scols = meta["subject_cols"]
     if not scols:
         return _empty_fig("No subject columns detected")
 
     avgs = df[scols].mean().reset_index()
     avgs.columns = ["Subject", "Average Marks"]
+    avgs = avgs.sort_values("Average Marks", ascending=True)  # ascending for horizontal
 
-    fig = px.bar(
-        avgs, x="Subject", y="Average Marks",
-        color="Subject", color_discrete_sequence=PALETTE,
-        text_auto=".1f",
-        title="Average Marks per Subject",
+    n = len(scols)
+
+    if n > 20:
+        # Show only top 10 + bottom 5 to keep it readable
+        top10  = avgs.nlargest(10,  "Average Marks")
+        bot5   = avgs.nsmallest(5, "Average Marks")
+        avgs   = pd.concat([bot5, top10]).drop_duplicates().sort_values("Average Marks")
+        title  = f"Top 10 & Bottom 5 Subjects by Average Marks  (out of {n} total)"
+    elif n > 8:
+        title = "Average Marks per Subject"
+    else:
+        title = "Average Marks per Subject"
+
+    # Colour: green→yellow→red based on score
+    max_m = avgs["Average Marks"].max() or 100
+    colors = []
+    for v in avgs["Average Marks"]:
+        pct = v / max_m
+        if   pct >= 0.80: colors.append("#34d399")
+        elif pct >= 0.65: colors.append("#fbbf24")
+        elif pct >= 0.50: colors.append("#fb923c")
+        else:             colors.append("#f87171")
+
+    fig = go.Figure(go.Bar(
+        x=avgs["Average Marks"],
+        y=avgs["Subject"],
+        orientation="h",
+        marker_color=colors,
+        marker_line_width=0,
+        text=[f"{v:.1f}" for v in avgs["Average Marks"]],
+        textposition="outside",
+        textfont=dict(size=11, color="#e2e8f0"),
+    ))
+    fig.update_layout(
+        title=title,
+        height=max(320, len(avgs) * 32),
+        **_base_layout(
+            xaxis=dict(showgrid=True, gridcolor="rgba(148,163,184,0.15)",
+                       color="#94a3b8", range=[0, max_m * 1.15]),
+            yaxis=dict(showgrid=False, color="#e2e8f0", automargin=True),
+        )
     )
-    fig.update_traces(marker_line_width=0, textfont_size=11)
-    fig.update_layout(**_base_layout(
-        xaxis=dict(showgrid=False, color="#94a3b8"),
-        yaxis=dict(showgrid=True, gridcolor="rgba(148,163,184,0.15)", color="#94a3b8"),
+    return fig
+
+
+def subject_heatmap_by_dept(meta: dict) -> go.Figure:
+    """
+    Heatmap: Departments (rows) × Subjects (cols) → Average marks.
+    Best for many subjects — instantly shows which dept excels where.
+    """
+    df       = meta["df"]
+    scols    = meta["subject_cols"]
+    dept_col = meta.get("dept_col")
+
+    if not scols or not dept_col:
+        return _empty_fig("Need department + subject columns")
+
+    pivot = df.groupby(dept_col)[scols].mean().round(1)
+
+    # Shorten long subject names for readability
+    short_labels = [s[:14] + "…" if len(s) > 14 else s for s in pivot.columns]
+
+    fig = go.Figure(go.Heatmap(
+        z=pivot.values,
+        x=short_labels,
+        y=pivot.index.tolist(),
+        colorscale=[
+            [0.0,  "#f87171"],   # red   (low)
+            [0.5,  "#fbbf24"],   # yellow (mid)
+            [1.0,  "#34d399"],   # green (high)
+        ],
+        text=pivot.values,
+        texttemplate="%{text:.0f}",
+        textfont=dict(size=10),
+        hoverongaps=False,
+        showscale=True,
+        colorbar=dict(
+            title="Avg Marks",
+            tickfont=dict(color="#94a3b8"),
+            titlefont=dict(color="#94a3b8"),
+        ),
+    ))
+    fig.update_layout(
+        title="📊 Department × Subject Heatmap  (avg marks)",
+        height=max(280, len(pivot) * 55 + 100),
+        **_base_layout(
+            xaxis=dict(color="#cbd5e1", tickangle=-35, automargin=True),
+            yaxis=dict(color="#e2e8f0", automargin=True),
+            margin=dict(l=140, r=60, t=60, b=120),
+        )
+    )
+    return fig
+
+
+def subject_treemap(meta: dict) -> go.Figure:
+    """
+    Treemap: box size = student count, colour = avg marks.
+    Great overview when subjects > 15.
+    """
+    df    = meta["df"]
+    scols = meta["subject_cols"]
+    if not scols:
+        return _empty_fig("No subject columns detected")
+
+    rows = []
+    for sc in scols:
+        col = df[sc].dropna()
+        rows.append({
+            "Subject":  sc,
+            "Avg":      round(float(col.mean()), 1),
+            "Students": len(col),
+        })
+    tdf = pd.DataFrame(rows)
+
+    max_avg = tdf["Avg"].max() or 100
+    fig = px.treemap(
+        tdf,
+        path=["Subject"],
+        values="Students",
+        color="Avg",
+        color_continuous_scale=["#f87171", "#fbbf24", "#34d399"],
+        range_color=[tdf["Avg"].min(), max_avg],
+        title="Subject Overview — box size = students, colour = avg marks",
+        custom_data=["Avg"],
+    )
+    fig.update_traces(
+        texttemplate="<b>%{label}</b><br>Avg: %{customdata[0]:.1f}",
+        textfont=dict(size=12),
+    )
+    fig.update_layout(
+        height=480,
+        **_base_layout(margin=dict(l=10, r=10, t=50, b=10)),
+    )
+    fig.update_coloraxes(colorbar=dict(
+        title="Avg Marks",
+        tickfont=dict(color="#94a3b8"),
+        titlefont=dict(color="#94a3b8"),
     ))
     return fig
 
