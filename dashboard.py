@@ -110,9 +110,9 @@ def subject_heatmap_by_dept(meta: dict) -> go.Figure:
         x=short_labels,
         y=pivot.index.tolist(),
         colorscale=[
-            [0.0,  "#f87171"],   # red   (low)
-            [0.5,  "#fbbf24"],   # yellow (mid)
-            [1.0,  "#34d399"],   # green (high)
+            [0.0,  "#f87171"],
+            [0.5,  "#fbbf24"],
+            [1.0,  "#34d399"],
         ],
         text=pivot.values,
         texttemplate="%{text:.0f}",
@@ -120,9 +120,8 @@ def subject_heatmap_by_dept(meta: dict) -> go.Figure:
         hoverongaps=False,
         showscale=True,
         colorbar=dict(
-            title="Avg Marks",
+            title=dict(text="Avg Marks", font=dict(color="#94a3b8")),
             tickfont=dict(color="#94a3b8"),
-            titlefont=dict(color="#94a3b8"),
         ),
     ))
     fig.update_layout(
@@ -177,9 +176,8 @@ def subject_treemap(meta: dict) -> go.Figure:
         **_base_layout(margin=dict(l=10, r=10, t=50, b=10)),
     )
     fig.update_coloraxes(colorbar=dict(
-        title="Avg Marks",
+        title=dict(text="Avg Marks", font=dict(color="#94a3b8")),
         tickfont=dict(color="#94a3b8"),
-        titlefont=dict(color="#94a3b8"),
     ))
     return fig
 
