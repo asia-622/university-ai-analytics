@@ -505,16 +505,53 @@ elif page == "📚 Subject Analysis":
 
     # ════ TAB 1: Class Overview ════════════════════════════════════════════════
     with tab1:
-        subject = st.selectbox("Select Subject", scols, key="subj_class")
-        col_data = df[subject].dropna()
+        n_subjects = len(scols)
 
+        # ── Top metrics ───────────────────────────────────────────────────────
+        avgs_series = df[scols].mean().sort_values(ascending=False)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Subjects", n_subjects)
+        c2.metric("Highest Avg Subject", f"{avgs_series.index[0]} ({avgs_series.iloc[0]:.1f})")
+        c3.metric("Lowest Avg Subject",  f"{avgs_series.index[-1]} ({avgs_series.iloc[-1]:.1f})")
+        c4.metric("Overall Average", f"{df[scols].mean().mean():.1f}")
+
+        st.markdown("---")
+
+        # ── Chart selection based on subject count ────────────────────────────
+        if n_subjects <= 12:
+            # Clean horizontal bar — fully readable
+            st.plotly_chart(dash.marks_bar_chart(meta), use_container_width=True)
+
+        else:
+            # Too many subjects — offer 3 smart views
+            view = st.radio(
+                "📊 Chart style choose karein:",
+                ["🔥 Heatmap (Dept × Subject)", "🗂️ Treemap (Overview)", "📊 Top/Bottom Bar"],
+                horizontal=True, key="subj_chart_view"
+            )
+
+            if view == "🔥 Heatmap (Dept × Subject)":
+                st.caption("💡 Har department ka har subject mein average — color green = acha, red = kamzor")
+                st.plotly_chart(dash.subject_heatmap_by_dept(meta), use_container_width=True)
+
+            elif view == "🗂️ Treemap (Overview)":
+                st.caption("💡 Bada box = zyada students, green = high marks, red = low marks")
+                st.plotly_chart(dash.subject_treemap(meta), use_container_width=True)
+
+            else:
+                st.caption("💡 Top 10 highest + Bottom 5 lowest average subjects")
+                st.plotly_chart(dash.marks_bar_chart(meta), use_container_width=True)
+
+        st.markdown("---")
+
+        # ── Per-Subject dropdown stats ────────────────────────────────────────
+        subject = st.selectbox("🔍 Kisi ek subject ki detail dekhein", scols, key="subj_class")
+        col_data = df[subject].dropna()
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Average",  f"{col_data.mean():.2f}")
         c2.metric("Highest",  f"{col_data.max():.2f}")
         c3.metric("Lowest",   f"{col_data.min():.2f}")
         c4.metric("Std Dev",  f"{col_data.std():.2f}")
-
-        st.markdown("---")
 
         if name_col:
             st.plotly_chart(
@@ -522,7 +559,7 @@ elif page == "📚 Subject Analysis":
                 use_container_width=True,
             )
 
-        st.markdown("### 📋 All Subjects Summary")
+        st.markdown("### 📋 All Subjects Summary Table")
         subj_data = get_subject_analysis(meta)
         if "subjects" in subj_data:
             sum_rows = [
@@ -534,26 +571,6 @@ elif page == "📚 Subject Analysis":
                 pd.DataFrame(sum_rows).sort_values("Average", ascending=False),
                 use_container_width=True,
             )
-
-        col_l, col_r = st.columns(2)
-        with col_l:
-            st.plotly_chart(dash.marks_bar_chart(meta), use_container_width=True)
-        with col_r:
-            melt_df = df[scols].melt(var_name="Subject", value_name="Score")
-            fig_box = px.box(
-                melt_df, x="Subject", y="Score", color="Subject",
-                title="Score Distribution per Subject",
-                color_discrete_sequence=px.colors.qualitative.Bold,
-            )
-            fig_box.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="IBM Plex Sans", color="#e2e8f0"),
-                margin=dict(l=30, r=30, t=50, b=30),
-                showlegend=False,
-                xaxis=dict(color="#94a3b8", tickangle=-30),
-                yaxis=dict(color="#94a3b8"),
-            )
-            st.plotly_chart(fig_box, use_container_width=True)
 
     # ════ TAB 2: Per-Student Subject Performance ═══════════════════════════════
     with tab2:
@@ -592,43 +609,72 @@ elif page == "📚 Subject Analysis":
         # Max per subject for relative bar
         max_per_subj = {sc: float(df[sc].max()) if df[sc].max() > 0 else 100 for sc in scols}
 
-        # ── Filter ────────────────────────────────────────────────────────────
+        # ── Filter & Select ONE student ───────────────────────────────────────
         import re as _re
+
+        roll_col = meta.get("roll_col")   # Student_ID column
+
         if search_q.strip():
             mask = df[name_col].astype(str).str.lower().str.contains(
                 _re.escape(search_q.strip().lower()), na=False
             )
-            show_df = df[mask].head(20).reset_index(drop=True)
-            if show_df.empty:
+            matched_df = df[mask].reset_index(drop=True)
+            if matched_df.empty:
                 st.warning(f"**'{search_q}'** naam ka koi student nahi mila.")
                 st.stop()
-            st.success(f"✅ {len(show_df)} student(s) mili")
+
+            # ── If multiple rows found, let user pick ONE by ID ───────────────
+            if len(matched_df) > 1:
+                # Build display labels: "Ayesha (ID: 1001 | CS)" 
+                def _row_label(r):
+                    lbl = str(r[name_col])
+                    if roll_col and roll_col in r.index:
+                        lbl += f"  |  ID: {r[roll_col]}"
+                    if meta.get("dept_col") and meta["dept_col"] in r.index:
+                        lbl += f"  |  {r[meta['dept_col']]}"
+                    if meta.get("year_col") and meta["year_col"] in r.index:
+                        lbl += f"  |  Sem {r[meta['year_col']]}"
+                    return lbl
+
+                labels   = [_row_label(matched_df.iloc[i]) for i in range(len(matched_df))]
+                selected = st.selectbox(
+                    f"✅ {len(matched_df)} students mili — kisi ek ko select karein:",
+                    options=range(len(matched_df)),
+                    format_func=lambda i: labels[i],
+                    key="student_selector"
+                )
+                show_df = matched_df.iloc[[selected]].reset_index(drop=True)
+            else:
+                show_df = matched_df
+
         else:
-            page_size = 10
-            total_stu = len(df)
+            # ── Pagination for all students ───────────────────────────────────
+            page_size   = 10
+            total_stu   = len(df)
             total_pages = max(1, (total_stu + page_size - 1) // page_size)
             pg = st.number_input(
                 f"Page (1–{total_pages})", min_value=1, max_value=total_pages,
                 value=1, step=1, key="stu_pg"
             )
-            start = (pg - 1) * page_size
+            start   = (pg - 1) * page_size
             show_df = df.iloc[start: start + page_size].reset_index(drop=True)
             st.caption(f"Students {start+1}–{min(start+page_size, total_stu)} of {total_stu}")
 
-        # ── Render cards ──────────────────────────────────────────────────────
+        # ── Render ONE card per row ───────────────────────────────────────────
         for _, row in show_df.iterrows():
             sname = str(row.get(name_col, "Unknown"))
             avg   = float(row["Average"]) if "Average" in row.index else float(
-                np.nanmean([row[sc] for sc in scols if sc in row.index])
+                np.nanmean([row[sc] for sc in scols if sc in row.index and not np.isnan(row[sc])])
             )
 
-            # Build subject progress bars HTML
+            # Subject progress bars — only subjects that have a value
             bars_html = ""
-            for sc in scols:
-                score  = float(row[sc]) if sc in row.index else 0.0
-                max_s  = max_per_subj[sc]
-                color  = _bar_color(score, max_s)
-                bar_w  = min(100, round((score / max_s) * 100)) if max_s else 0
+            valid_scols = [sc for sc in scols if sc in row.index and not np.isnan(float(row[sc] if row[sc] == row[sc] else 0))]
+            for sc in valid_scols:
+                score = float(row[sc])
+                max_s = max_per_subj[sc]
+                color = _bar_color(score, max_s)
+                bar_w = min(100, round((score / max_s) * 100)) if max_s else 0
                 bars_html += f"""
                 <div style='margin:0.35rem 0'>
                   <div style='display:flex;justify-content:space-between;margin-bottom:0.1rem'>
@@ -640,9 +686,9 @@ elif page == "📚 Subject Analysis":
                   </div>
                 </div>"""
 
-            # Extra info badges
+            # Info badges
             extra = ""
-            for key, label in [("dept_col","Dept"),("roll_col","Roll"),
+            for key, label in [("dept_col","Dept"),("roll_col","ID"),
                                 ("year_col","Semester"),("attend_col","Attendance")]:
                 cname = meta.get(key)
                 if cname and cname in row.index:
@@ -673,31 +719,28 @@ elif page == "📚 Subject Analysis":
             </div>
             """, unsafe_allow_html=True)
 
-        # ── Chart for searched student ─────────────────────────────────────────
-        if search_q.strip() and not show_df.empty and name_col:
-            st.markdown("#### 📊 Subject Comparison Chart")
-            chart_rows = []
-            for _, row in show_df.head(5).iterrows():
-                sname = str(row.get(name_col, "?"))
-                for sc in scols:
-                    chart_rows.append({"Student": sname, "Subject": sc,
-                                       "Marks": float(row.get(sc, 0))})
-            chart_df = pd.DataFrame(chart_rows)
-            fig_cmp = px.bar(
-                chart_df, x="Subject", y="Marks", color="Student",
-                barmode="group", text_auto=".0f",
-                title="Subject-wise Marks Comparison",
-                color_discrete_sequence=px.colors.qualitative.Bold,
-            )
-            fig_cmp.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="IBM Plex Sans", color="#e2e8f0"),
-                margin=dict(l=30, r=30, t=50, b=30),
-                xaxis=dict(color="#94a3b8", tickangle=-30),
-                yaxis=dict(color="#94a3b8"),
-                legend=dict(bgcolor="rgba(0,0,0,0)"),
-            )
-            st.plotly_chart(fig_cmp, use_container_width=True)
+            # ── Individual bar chart (sirf is student ke valid subjects) ──────
+            if valid_scols:
+                chart_data = pd.DataFrame({
+                    "Subject": valid_scols,
+                    "Marks":   [float(row[sc]) for sc in valid_scols],
+                })
+                fig_one = px.bar(
+                    chart_data, x="Subject", y="Marks",
+                    color="Subject",
+                    text_auto=".0f",
+                    title=f"📊 {sname} — Subject-wise Marks",
+                    color_discrete_sequence=px.colors.qualitative.Bold,
+                )
+                fig_one.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="IBM Plex Sans", color="#e2e8f0"),
+                    margin=dict(l=30, r=30, t=50, b=60),
+                    xaxis=dict(color="#94a3b8", tickangle=-30),
+                    yaxis=dict(color="#94a3b8", range=[0, 105]),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_one, use_container_width=True)
 
         # ── Full table ────────────────────────────────────────────────────────
         with st.expander("📋 Sab Students — Table View"):
@@ -715,74 +758,256 @@ elif page == "📚 Subject Analysis":
 elif page == "🔍 Student Search":
     _require_data()
     meta = st.session_state["meta"]
+    df   = meta["df"]
     st.markdown("# 🔍 Student Search & Profile")
 
     name_col = meta.get("name_col")
-    if name_col is None:
-        st.error("❌ No student name column detected.")
-        st.stop()
+    dept_col = meta.get("dept_col")
+    scols    = meta["subject_cols"]
 
-    query = st.text_input("🔎 Enter student name", placeholder="e.g. Alice, John…")
+    # ── Search mode toggle ────────────────────────────────────────────────────
+    search_mode = st.radio(
+        "Search by:", ["👤 Student Name", "🏛️ Department"],
+        horizontal=True, key="search_mode_radio"
+    )
 
-    if query:
-        rows = get_student_row(meta, query)
-        if rows.empty:
-            st.warning(f"No students found matching **'{query}'**")
-        else:
-            st.success(f"Found **{len(rows)}** student(s)")
-            for idx in range(min(len(rows), 5)):
-                row = rows.iloc[idx]
-                name = str(row.get(name_col, "?"))
-                st.markdown(f"### 👤 {name}")
+    # ── Grade badge helper ────────────────────────────────────────────────────
+    def _gbadge(avg):
+        if   avg >= 90: g, c = "A+", "#22d3ee"
+        elif avg >= 80: g, c = "A",  "#34d399"
+        elif avg >= 70: g, c = "B",  "#a3e635"
+        elif avg >= 60: g, c = "C",  "#fbbf24"
+        elif avg >= 50: g, c = "D",  "#fb923c"
+        else:           g, c = "F",  "#f87171"
+        return g, c
 
-                info_cols = st.columns(4)
-                i = 0
-                for col_name in [meta.get("dept_col"), meta.get("roll_col"),
-                                  meta.get("year_col"), meta.get("attend_col")]:
-                    if col_name and col_name in row.index:
-                        val = row[col_name]
-                        label = col_name.replace("_", " ").title()
-                        info_cols[i % 4].metric(label, f"{val}")
-                        i += 1
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 1 — STUDENT NAME SEARCH
+    # ══════════════════════════════════════════════════════════════════════════
+    if search_mode == "👤 Student Name":
+        if name_col is None:
+            st.error("❌ No student name column detected.")
+            st.stop()
 
-                if "Average" in row.index:
-                    info_cols[i % 4].metric("Average", f"{row['Average']:.2f}")
-                    i += 1
-                if "Grade" in row.index:
-                    info_cols[i % 4].metric("Grade", str(row["Grade"]))
+        query = st.text_input("🔎 Enter student name", placeholder="e.g. Ayesha, Ali, Sara…")
 
-                # Subject chart
-                scols = meta["subject_cols"]
-                if scols:
-                    fig = dash.student_subject_bar(row, scols, name)
-                    st.plotly_chart(fig, use_container_width=True)
+        if query:
+            rows = get_student_row(meta, query)
+            if rows.empty:
+                st.warning(f"No student found matching **'{query}'**")
+                st.stop()
 
-                # Full record
-                with st.expander("📋 Full Record"):
-                    record = {k: v for k, v in row.items()
-                              if not str(k).startswith("_")}
-                    st.json({k: (float(v) if isinstance(v, (np.floating, np.integer)) else str(v))
-                             for k, v in record.items()})
+            st.success(f"Found **{len(rows)}** student(s) matching '{query}'")
 
-                # ML prediction
-                ml = st.session_state.get("ml_model")
-                if ml:
-                    try:
-                        row_df = pd.DataFrame([row])
-                        pred = predict_batch(ml, row_df).iloc[0]
-                        st.info(f"🤖 Predicted **{ml['target_col']}**: **{pred:.2f}**  "
-                                f"*(ML model — R²={ml['metrics']['r2']})*")
-                    except Exception:
-                        pass
+            # If multiple — let user pick ONE by ID/dept
+            if len(rows) > 1:
+                def _label(r):
+                    lbl = str(r[name_col])
+                    if meta.get("roll_col") and meta["roll_col"] in r.index:
+                        lbl += f"  |  ID: {r[meta['roll_col']]}"
+                    if dept_col and dept_col in r.index:
+                        lbl += f"  |  {r[dept_col]}"
+                    if meta.get("year_col") and meta["year_col"] in r.index:
+                        lbl += f"  |  Sem {r[meta['year_col']]}"
+                    return lbl
+                labels = [_label(rows.iloc[i]) for i in range(len(rows))]
+                sel = st.selectbox(
+                    "Multiple students found — select one:",
+                    range(len(rows)), format_func=lambda i: labels[i],
+                    key="stu_sel"
+                )
+                row = rows.iloc[sel]
+            else:
+                row = rows.iloc[0]
 
-                st.markdown("---")
+            sname = str(row.get(name_col, "?"))
 
-    # Download search result
-    if query and not get_student_row(meta, query).empty:
-        result_df = get_student_row(meta, query)
-        csv_bytes = result_df.to_csv(index=False).encode()
-        st.download_button("📥 Download Results", csv_bytes,
-                           file_name=f"search_{query}.csv", mime="text/csv")
+            # ── Info metrics ──────────────────────────────────────────────────
+            st.markdown(f"### 👤 {sname}")
+            c1, c2, c3, c4 = st.columns(4)
+            if dept_col and dept_col in row.index:
+                c1.metric("Department", str(row[dept_col]))
+            if meta.get("roll_col") and meta["roll_col"] in row.index:
+                c2.metric("Student ID", str(row[meta["roll_col"]]))
+            if meta.get("year_col") and meta["year_col"] in row.index:
+                c3.metric("Semester", str(row[meta["year_col"]]))
+            if "Average" in row.index:
+                c4.metric("Average", f"{row['Average']:.2f}")
+            if "Grade" in row.index:
+                g, gc = _gbadge(float(row.get("Average", 0)))
+                st.markdown(
+                    f"**GRADE** &nbsp; <span style='color:{gc};font-size:1.4rem;"
+                    f"font-weight:700'>{row['Grade']}</span>",
+                    unsafe_allow_html=True
+                )
+
+            # ── Subject chart — ONLY student's dept subjects ──────────────────
+            if scols:
+                # Get dept-specific subjects if available
+                dept_subject_map = meta.get("dept_subject_map", {})
+                student_dept = str(row.get(dept_col, "")) if dept_col and dept_col in row.index else ""
+
+                if dept_subject_map and student_dept and student_dept in dept_subject_map:
+                    # Use only subjects belonging to this student's department
+                    relevant_scols = [sc for sc in dept_subject_map[student_dept] if sc in scols]
+                else:
+                    # Fallback: filter by non-NaN, non-zero marks
+                    relevant_scols = [
+                        sc for sc in scols
+                        if sc in row.index and pd.notna(row[sc]) and float(row[sc]) > 0
+                    ]
+
+                student_scols = relevant_scols
+
+                if student_scols:
+                    marks = [float(row[sc]) for sc in student_scols]
+                    chart_df = pd.DataFrame({"Subject": student_scols, "Marks": marks})
+                    chart_df = chart_df.sort_values("Marks", ascending=True)  # horizontal
+
+                    # Colour by score
+                    max_m = max(marks) or 100
+                    colors = []
+                    for v in chart_df["Marks"]:
+                        pct = v / max_m
+                        if   pct >= 0.80: colors.append("#34d399")
+                        elif pct >= 0.65: colors.append("#fbbf24")
+                        elif pct >= 0.50: colors.append("#fb923c")
+                        else:             colors.append("#f87171")
+
+                    fig_stu = go.Figure(go.Bar(
+                        x=chart_df["Marks"],
+                        y=chart_df["Subject"],
+                        orientation="h",
+                        marker_color=colors,
+                        marker_line_width=0,
+                        text=[f"{v:.0f}" for v in chart_df["Marks"]],
+                        textposition="outside",
+                        textfont=dict(color="#e2e8f0", size=11),
+                    ))
+                    fig_stu.update_layout(
+                        title=f"📊 {sname} — Subject-wise Marks ({len(student_scols)} subjects)",
+                        height=max(320, len(student_scols) * 30 + 80),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(family="IBM Plex Sans", color="#e2e8f0"),
+                        margin=dict(l=10, r=60, t=50, b=30),
+                        xaxis=dict(color="#94a3b8", range=[0, max_m * 1.18],
+                                   showgrid=True, gridcolor="rgba(148,163,184,0.15)"),
+                        yaxis=dict(color="#e2e8f0", automargin=True, showgrid=False),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(fig_stu, use_container_width=True)
+                else:
+                    st.info("No subject marks found for this student.")
+
+            # ML prediction
+            ml = st.session_state.get("ml_model")
+            if ml:
+                try:
+                    row_df = pd.DataFrame([row])
+                    pred   = predict_batch(ml, row_df).iloc[0]
+                    st.info(f"🤖 ML Predicted **{ml['target_col']}**: **{pred:.2f}** "
+                            f"*(R²={ml['metrics']['r2']})*")
+                except Exception:
+                    pass
+
+            # Download
+            csv_bytes = pd.DataFrame([row]).to_csv(index=False).encode()
+            st.download_button("📥 Download Profile", csv_bytes,
+                               file_name=f"{sname}_profile.csv", mime="text/csv")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MODE 2 — DEPARTMENT SEARCH
+    # ══════════════════════════════════════════════════════════════════════════
+    else:
+        if not dept_col:
+            st.error("❌ No department column detected.")
+            st.stop()
+
+        dept_list = sorted(df[dept_col].dropna().unique().tolist())
+        selected_dept = st.selectbox("🏛️ Select Department", dept_list, key="dept_sel")
+
+        dept_df = df[df[dept_col] == selected_dept].reset_index(drop=True)
+        st.success(f"**{selected_dept}** — {len(dept_df)} students")
+
+        # ── Dept metrics ──────────────────────────────────────────────────────
+        if scols:
+            # Get only subjects for this department
+            dept_subject_map = meta.get("dept_subject_map", {})
+            if dept_subject_map and selected_dept in dept_subject_map:
+                dept_scols = [sc for sc in dept_subject_map[selected_dept] if sc in scols]
+            else:
+                # Fallback: columns where this dept has non-NaN values
+                dept_scols = [
+                    sc for sc in scols
+                    if dept_df[sc].notna().sum() > 0 and dept_df[sc].mean() > 0
+                ]
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Students", len(dept_df))
+            if "Average" in dept_df.columns:
+                d2.metric("Dept Average", f"{dept_df['Average'].mean():.2f}")
+            if meta.get("attend_col"):
+                d3.metric("Avg Attendance",
+                          f"{dept_df[meta['attend_col']].mean():.1f}%")
+            if "Grade" in dept_df.columns:
+                top_g = dept_df["Grade"].value_counts().index[0]
+                d4.metric("Most Common Grade", top_g)
+
+            # ── Dept subject performance — horizontal bar ─────────────────────
+            dept_avgs = dept_df[dept_scols].mean().dropna().sort_values(ascending=True)
+            dept_avgs = dept_avgs[dept_avgs > 0]
+
+            max_d = dept_avgs.max() or 100
+            dcolors = []
+            for v in dept_avgs:
+                pct = v / max_d
+                if   pct >= 0.80: dcolors.append("#34d399")
+                elif pct >= 0.65: dcolors.append("#fbbf24")
+                elif pct >= 0.50: dcolors.append("#fb923c")
+                else:             dcolors.append("#f87171")
+
+            fig_dept = go.Figure(go.Bar(
+                x=dept_avgs.values,
+                y=dept_avgs.index.tolist(),
+                orientation="h",
+                marker_color=dcolors,
+                marker_line_width=0,
+                text=[f"{v:.1f}" for v in dept_avgs.values],
+                textposition="outside",
+                textfont=dict(color="#e2e8f0", size=11),
+            ))
+            fig_dept.update_layout(
+                title=f"📊 {selected_dept} — Average Marks per Subject",
+                height=max(320, len(dept_avgs) * 30 + 80),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="IBM Plex Sans", color="#e2e8f0"),
+                margin=dict(l=10, r=60, t=50, b=30),
+                xaxis=dict(color="#94a3b8", range=[0, max_d * 1.18],
+                           showgrid=True, gridcolor="rgba(148,163,184,0.15)"),
+                yaxis=dict(color="#e2e8f0", automargin=True, showgrid=False),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_dept, use_container_width=True)
+
+        # ── Student list table ────────────────────────────────────────────────
+        st.markdown(f"#### 👥 All Students in {selected_dept}")
+        disp_cols = []
+        for c in [name_col, meta.get("roll_col"), meta.get("year_col"),
+                  "Average", "Grade", meta.get("attend_col")]:
+            if c and c in dept_df.columns:
+                disp_cols.append(c)
+        st.dataframe(
+            dept_df[disp_cols].sort_values("Average", ascending=False)
+            if "Average" in dept_df.columns else dept_df[disp_cols],
+            use_container_width=True, height=400
+        )
+
+        # Download
+        csv_bytes = dept_df.to_csv(index=False).encode()
+        st.download_button(f"📥 Download {selected_dept} Data", csv_bytes,
+                           file_name=f"{selected_dept}_students.csv",
+                           mime="text/csv")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

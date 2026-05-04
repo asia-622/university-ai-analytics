@@ -43,6 +43,10 @@ def preprocess(df: pd.DataFrame) -> dict:
         logger.info("Long format detected — pivoting to wide format...")
         df = _pivot_long_to_wide(df, long_info)
         logger.info("Pivoted shape: %s", df.shape)
+        # Store dept→subjects mapping built during pivot
+        meta["dept_subject_map"] = long_info.get("dept_subject_map", {})
+    else:
+        meta["dept_subject_map"] = {}
 
     df = _fill_missing(df)
 
@@ -161,6 +165,27 @@ def _pivot_long_to_wide(df: pd.DataFrame, long_info: dict) -> pd.DataFrame:
         if info_cols:
             info_df = df.groupby(id_col)[info_cols].first().reset_index()
             pivoted = pivoted.merge(info_df, on=id_col, how="left")
+
+        # ── Build dept → subjects mapping ────────────────────────────────────
+        # Find department column in carry_cols
+        dept_col = None
+        dept_hints = ["department", "dept", "faculty", "branch", "program"]
+        for col in carry_cols:
+            if any(h in normalise_col(col) for h in dept_hints):
+                dept_col = col
+                break
+
+        long_info["dept_col_for_mapping"] = dept_col
+
+        if dept_col:
+            # Map each department to its unique subjects
+            dept_subject_map = {}
+            for dept, grp in df.groupby(dept_col):
+                subjects = grp[subject_col].dropna().unique().tolist()
+                dept_subject_map[str(dept)] = subjects
+            long_info["dept_subject_map"] = dept_subject_map
+        else:
+            long_info["dept_subject_map"] = {}
 
     except Exception as e:
         logger.error("Pivot failed: %s", e)
