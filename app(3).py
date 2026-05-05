@@ -350,121 +350,101 @@ elif page == "🔍 Student Search":
     if rows.empty:
         st.warning(f"No student found matching **'{query}'**"); st.stop()
 
-    st.success(f"✅ Found **{len(rows)}** match(es)")
+    st.success(f"✅ Found **{len(rows)}** student(s) matching '{query}'")
 
-    # Pick one student if multiple
-    if len(rows)>1:
-        def _lbl(r):
-            lbl=str(r[name_col])
-            if meta.get("roll_col") and meta["roll_col"] in r.index:
-                lbl+=f" | ID:{r[meta['roll_col']]}"
-            if dept_col and dept_col in r.index:
-                lbl+=f" | {r[dept_col]}"
-            if meta.get("year_col") and meta["year_col"] in r.index:
-                lbl+=f" | Sem {r[meta['year_col']]}"
-            return lbl
-        lbls=[_lbl(rows.iloc[i]) for i in range(len(rows))]
-        sel=st.selectbox("Multiple matches — select one:",
-                         range(len(rows)),format_func=lambda i:lbls[i])
-        row=rows.iloc[sel]
-    else:
-        row=rows.iloc[0]
+    # ── Show ALL matched students ─────────────────────────────────────────────
+    for idx in range(len(rows)):
+        row   = rows.iloc[idx]
+        sname = str(row.get(name_col,"?"))
+        avg   = float(row["Average"]) if "Average" in row.index else 0.0
+        g,gc  = _grade_str(avg)
 
-    sname = str(row.get(name_col,"?"))
-    avg   = float(row["Average"]) if "Average" in row.index else 0.0
-    g,gc  = _grade_str(avg)
+        # ── Profile card ──────────────────────────────────────────────────────
+        st.markdown(f"""
+        <div style='background:#1e293b;border:1px solid #334155;border-radius:14px;
+                    padding:1.2rem 1.5rem;margin:1rem 0 0.5rem 0'>
+          <span style='font-size:1.15rem;font-weight:700;color:#e2e8f0'>👤 {sname}</span>
+          &nbsp;&nbsp;<span style='background:{gc}22;color:{gc};border:1px solid {gc}55;
+          border-radius:20px;padding:0.15rem 0.7rem;font-size:0.85rem;font-weight:700'>{g}</span>
+        </div>""", unsafe_allow_html=True)
 
-    # ── Profile card ──────────────────────────────────────────────────────────
-    st.markdown(f"### 👤 {sname}")
-    k1,k2,k3,k4 = st.columns(4)
-    if dept_col and dept_col in row.index:
-        k1.metric("Department", str(row[dept_col]))
-    if meta.get("roll_col") and meta["roll_col"] in row.index:
-        k2.metric("Student ID",  str(row[meta["roll_col"]]))
-    if meta.get("year_col") and meta["year_col"] in row.index:
-        k3.metric("Semester",    str(row[meta["year_col"]]))
-    k4.metric("Average", f"{avg:.1f}")
-    st.markdown(f"**Grade:** <span style='color:{gc};font-size:1.5rem;font-weight:700'>{g}</span>",
-                unsafe_allow_html=True)
-    st.markdown("---")
+        k1,k2,k3,k4 = st.columns(4)
+        if dept_col and dept_col in row.index:
+            k1.metric("Department", str(row[dept_col]))
+        if meta.get("roll_col") and meta["roll_col"] in row.index:
+            k2.metric("Student ID", str(row[meta["roll_col"]]))
+        if meta.get("year_col") and meta["year_col"] in row.index:
+            k3.metric("Semester", str(row[meta["year_col"]]))
+        k4.metric("Average", f"{avg:.1f}")
 
-    # ── Get ONLY this student's ACTUAL subjects from original long data ──────
-    # Best approach: use original long-format data if available
-    df_long       = meta.get("df_long")
-    subj_col_long = meta.get("subject_col_long")
-    marks_col_long= meta.get("marks_col_long")
-    roll_col      = meta.get("roll_col")
-    student_id    = row.get(roll_col) if roll_col and roll_col in row.index else None
+        # ── Get this student's actual subjects from long-format data ──────────
+        df_long        = meta.get("df_long")
+        subj_col_long  = meta.get("subject_col_long")
+        marks_col_long = meta.get("marks_col_long")
+        roll_col       = meta.get("roll_col")
+        student_id     = row.get(roll_col) if roll_col and roll_col in row.index else None
 
-    stu_scols = []
+        stu_scols = []
 
-    # Method 1: From original long-format data (most accurate)
-    if df_long is not None and subj_col_long and marks_col_long and student_id is not None:
-        try:
-            id_col_long = None
-            for c in df_long.columns:
-                if roll_col and c == roll_col:
-                    id_col_long = c
-                    break
-                if roll_col and roll_col.lower() in c.lower():
-                    id_col_long = c
-                    break
-            if id_col_long:
-                stu_long = df_long[df_long[id_col_long].astype(str)==str(student_id)]
-                actual_subjects = stu_long[subj_col_long].dropna().unique().tolist()
-                stu_scols = [s for s in actual_subjects if s in scols]
-        except Exception:
-            stu_scols = []
+        # Method 1: original long data — most accurate
+        if df_long is not None and subj_col_long and marks_col_long and student_id is not None:
+            try:
+                id_col_long = None
+                for c in df_long.columns:
+                    if roll_col and (c == roll_col or roll_col.lower() in c.lower()):
+                        id_col_long = c; break
+                if id_col_long:
+                    stu_long = df_long[
+                        df_long[id_col_long].astype(str) == str(int(float(str(student_id))))
+                    ]
+                    actual   = stu_long[subj_col_long].dropna().unique().tolist()
+                    stu_scols = [s for s in actual if s in scols]
+            except Exception:
+                stu_scols = []
 
-    # Method 2: Fallback — only non-NaN, non-zero values for this student
-    if not stu_scols:
-        stu_scols = [
-            s for s in scols
-            if s in row.index
-            and pd.notna(row[s])
-            and str(row[s]) != "nan"
-            and float(row[s]) > 0
-        ]
+        # Method 2: fallback — non-NaN non-zero values
+        if not stu_scols:
+            stu_scols = [
+                s for s in scols
+                if s in row.index and pd.notna(row[s]) and float(row[s]) > 0
+            ]
 
-    if not stu_scols:
-        st.info("No subject marks found for this student."); st.stop()
+        if not stu_scols:
+            st.info("No subject marks found."); st.markdown("---"); continue
 
-    marks = [float(row[s]) for s in stu_scols]
+        marks = [float(row[s]) for s in stu_scols]
 
-    # ── Horizontal bar chart ──────────────────────────────────────────────────
-    st.plotly_chart(
-        _horiz_bar(stu_scols, marks,
-                   f"📊 {sname} — Subject-wise Marks ({len(stu_scols)} subjects)"),
-        use_container_width=True)
+        # ── Bar chart ─────────────────────────────────────────────────────────
+        st.plotly_chart(
+            _horiz_bar(stu_scols, marks,
+                       f"📊 {sname} (ID:{student_id}) — {len(stu_scols)} Subjects"),
+            use_container_width=True)
 
-    # ── Pie chart ─────────────────────────────────────────────────────────────
-    fig_pie = go.Figure(go.Pie(
-        labels=stu_scols, values=marks, hole=0.38,
-        textinfo="label+value",
-        textfont=dict(size=12,color="#e2e8f0"),
-        marker=dict(colors=px.colors.qualitative.Bold[:len(stu_scols)],
-                    line=dict(color="#0f172a",width=2)),
-        hovertemplate="<b>%{label}</b><br>Marks: %{value:.0f}<extra></extra>",
-    ))
-    fig_pie.update_layout(
-        title=f"🥧 {sname} — Marks Distribution",
-        height=420,
-        legend=dict(font=dict(color="#cbd5e1",size=11),
-                    bgcolor="rgba(0,0,0,0)",orientation="v"),
-        **_layout(margin=dict(l=10,r=10,t=50,b=20)))
-    st.plotly_chart(fig_pie, use_container_width=True)
+        # ── Pie chart ─────────────────────────────────────────────────────────
+        fig_pie = go.Figure(go.Pie(
+            labels=stu_scols, values=marks, hole=0.38,
+            textinfo="label+value",
+            textfont=dict(size=12, color="#e2e8f0"),
+            marker=dict(
+                colors=px.colors.qualitative.Bold[:len(stu_scols)],
+                line=dict(color="#0f172a", width=2)),
+            hovertemplate="<b>%{label}</b><br>Marks: %{value:.0f}<extra></extra>",
+        ))
+        fig_pie.update_layout(
+            title=f"🥧 {sname} — Marks Distribution",
+            height=400,
+            legend=dict(font=dict(color="#cbd5e1", size=11),
+                        bgcolor="rgba(0,0,0,0)", orientation="v"),
+            **_layout(margin=dict(l=10, r=10, t=50, b=20)))
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-    # ── ML prediction ─────────────────────────────────────────────────────────
-    ml = st.session_state.get("ml_model")
-    if ml:
-        try:
-            pred=predict_batch(ml,pd.DataFrame([row])).iloc[0]
-            st.info(f"🤖 ML Predicted **{ml['target_col']}**: **{pred:.2f}** (R²={ml['metrics']['r2']})")
-        except: pass
+        st.download_button(
+            f"📥 Download {sname} (ID:{student_id}) Profile",
+            pd.DataFrame([row]).to_csv(index=False).encode(),
+            f"{sname}_{student_id}_profile.csv", "text/csv",
+            key=f"dl_{idx}")
 
-    st.download_button("📥 Download Profile",
-                       pd.DataFrame([row]).to_csv(index=False).encode(),
-                       f"{sname}_profile.csv","text/csv")
+        st.markdown("---")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: COMPARISON
