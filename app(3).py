@@ -452,32 +452,187 @@ elif page == "🔍 Student Search":
 elif page == "⚖️ Comparison":
     _need_data()
     meta     = st.session_state["meta"]
+    df       = meta["df"]
     name_col = meta.get("name_col")
+    dept_col = meta.get("dept_col")
     scols    = meta["subject_cols"]
+    df_long        = meta.get("df_long")
+    subj_col_long  = meta.get("subject_col_long")
+    roll_col       = meta.get("roll_col")
+
     st.markdown("# ⚖️ Student Comparison")
 
     if not name_col: st.error("❌ No name column."); st.stop()
     if not scols:    st.error("❌ No subject columns."); st.stop()
 
-    all_names=meta["df"][name_col].dropna().astype(str).unique().tolist()
-    selected=st.multiselect("Select 2–5 students",all_names,max_selections=5)
-    if len(selected)<2:
+    # ── Build display labels: "Ayesha (CS | Sem 2)" ──────────────────────────
+    label_to_idx = {}   # "Ayesha (CS | Sem 2) #0" → df index
+    display_labels = []
+    for i, row in df.iterrows():
+        name = str(row.get(name_col, "?"))
+        lbl  = name
+        if dept_col and dept_col in row.index:
+            lbl += f"  |  {row[dept_col]}"
+        if meta.get("year_col") and meta["year_col"] in row.index:
+            lbl += f"  |  Sem {row[meta['year_col']]}"
+        if roll_col and roll_col in row.index:
+            lbl += f"  |  ID:{row[roll_col]}"
+        # Make unique
+        base = lbl
+        count = 0
+        while lbl in label_to_idx:
+            count += 1
+            lbl = f"{base} #{count}"
+        label_to_idx[lbl] = i
+        display_labels.append(lbl)
+
+    selected_labels = st.multiselect(
+        "Select 2–5 students to compare",
+        options=display_labels,
+        max_selections=5,
+        placeholder="Type name to search…"
+    )
+
+    if len(selected_labels) < 2:
         st.info("Please select at least 2 students."); st.stop()
 
-    rows=[]
-    for n in selected:
-        m=get_student_row(meta,n)
-        if not m.empty:
-            r=m.iloc[0].copy(); r["__name__"]=n; rows.append(r)
-    if len(rows)<2:
-        st.warning("Could not find enough student data."); st.stop()
+    # ── Get rows for selected students ────────────────────────────────────────
+    selected_rows = []
+    for lbl in selected_labels:
+        idx = label_to_idx[lbl]
+        r   = df.loc[idx].copy()
+        r["__label__"] = lbl.split("  |  ")[0].strip()   # just name for chart
+        r["__full__"]  = lbl
+        selected_rows.append(r)
 
-    comp=pd.DataFrame(rows).reset_index(drop=True)
-    st.plotly_chart(dash.comparison_bar(comp,scols),  use_container_width=True)
-    if len(scols)>=3:
-        st.plotly_chart(dash.comparison_radar(comp,scols),use_container_width=True)
-    tbl=comp[["__name__"]+[c for c in scols+["Average"] if c in comp.columns]].rename(columns={"__name__":"Student"})
-    st.dataframe(tbl,use_container_width=True)
+    comp = pd.DataFrame(selected_rows).reset_index(drop=True)
+
+    # ── Get each student's actual subjects from long-format data ──────────────
+    def _get_student_subjects(row):
+        sid = row.get(roll_col) if roll_col and roll_col in row.index else None
+        if df_long is not None and subj_col_long and sid is not None:
+            try:
+                id_col = None
+                for c in df_long.columns:
+                    if roll_col and (c == roll_col or roll_col.lower() in c.lower()):
+                        id_col = c; break
+                if id_col:
+                    stu_long = df_long[
+                        df_long[id_col].astype(str) == str(int(float(str(sid))))
+                    ]
+                    return stu_long[subj_col_long].dropna().unique().tolist()
+            except: pass
+        # Fallback: non-NaN non-zero
+        return [s for s in scols if s in row.index and pd.notna(row[s]) and float(row[s])>0]
+
+    # Build per-student subject sets
+    student_subjects = {}
+    for _, row in comp.iterrows():
+        lbl  = row["__full__"]
+        subs = _get_student_subjects(row)
+        student_subjects[lbl] = subs
+
+    # Find COMMON subjects across all selected students
+    all_subj_sets = [set(v) for v in student_subjects.values()]
+    common_subjects = list(all_subj_sets[0].intersection(*all_subj_sets[1:]))
+
+    # Also union (all subjects any student has)
+    union_subjects  = list(all_subj_sets[0].union(*all_subj_sets[1:]))
+
+    # ── Toggle: common vs all ─────────────────────────────────────────────────
+    view_mode = st.radio(
+        "Compare subjects:",
+        ["📌 Common subjects only", "📋 All subjects (each student has)"],
+        horizontal=True
+    )
+
+    if view_mode == "📌 Common subjects only":
+        compare_subjects = sorted(common_subjects)
+        if not compare_subjects:
+            st.warning("These students have no subjects in common. Showing all subjects instead.")
+            compare_subjects = sorted(union_subjects)
+    else:
+        compare_subjects = sorted(union_subjects)
+
+    if not compare_subjects:
+        st.warning("No subjects found."); st.stop()
+
+    st.markdown(f"**{len(compare_subjects)} subjects** being compared across **{len(selected_labels)} students**")
+    st.markdown("---")
+
+    # ── Grouped bar chart — clean horizontal ──────────────────────────────────
+    fig = go.Figure()
+    colors = px.colors.qualitative.Bold
+
+    for i, row in comp.iterrows():
+        lbl    = row["__label__"]
+        values = [float(row[s]) if s in row.index and pd.notna(row[s]) else 0
+                  for s in compare_subjects]
+        fig.add_trace(go.Bar(
+            name=row["__full__"],
+            x=values,
+            y=compare_subjects,
+            orientation="h",
+            marker_color=colors[i % len(colors)],
+            marker_line_width=0,
+            text=[f"{v:.0f}" for v in values],
+            textposition="outside",
+            textfont=dict(size=11, color="#e2e8f0"),
+        ))
+
+    fig.update_layout(
+        barmode="group",
+        title=f"📊 Student Marks Comparison ({len(compare_subjects)} subjects)",
+        height=max(400, len(compare_subjects) * 45 + 100),
+        xaxis=dict(color="#94a3b8", range=[0, 115],
+                   showgrid=True, gridcolor="rgba(148,163,184,0.15)"),
+        yaxis=dict(color="#e2e8f0", automargin=True,
+                   showgrid=False, tickfont=dict(size=12)),
+        legend=dict(font=dict(color="#cbd5e1", size=11),
+                    bgcolor="rgba(0,0,0,0)", orientation="h",
+                    yanchor="bottom", y=1.01, xanchor="left", x=0),
+        **_layout(margin=dict(l=10, r=80, t=80, b=20))
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Radar chart ───────────────────────────────────────────────────────────
+    if len(compare_subjects) >= 3:
+        radar_subjects = compare_subjects[:12]  # max 12 for readability
+        fig_r = go.Figure()
+        for i, row in comp.iterrows():
+            vals = [float(row[s]) if s in row.index and pd.notna(row[s]) else 0
+                    for s in radar_subjects]
+            vals.append(vals[0])
+            fig_r.add_trace(go.Scatterpolar(
+                r=vals, theta=radar_subjects+[radar_subjects[0]],
+                fill="toself", name=row["__full__"],
+                marker_color=colors[i % len(colors)], opacity=0.7,
+            ))
+        fig_r.update_layout(
+            polar=dict(
+                bgcolor="rgba(30,41,59,0.6)",
+                radialaxis=dict(visible=True, color="#94a3b8",
+                                gridcolor="rgba(148,163,184,0.2)", range=[0,100]),
+                angularaxis=dict(color="#cbd5e1", tickfont=dict(size=11)),
+            ),
+            title="🕸️ Radar Comparison" + (" (top 12 subjects)" if len(compare_subjects)>12 else ""),
+            height=500,
+            legend=dict(font=dict(color="#cbd5e1"), bgcolor="rgba(0,0,0,0)"),
+            **_layout(margin=dict(l=40,r=40,t=60,b=20))
+        )
+        st.plotly_chart(fig_r, use_container_width=True)
+
+    # ── Summary table ─────────────────────────────────────────────────────────
+    st.markdown("### 📋 Comparison Table")
+    tbl_rows = []
+    for _, row in comp.iterrows():
+        entry = {"Student": row["__full__"]}
+        for s in compare_subjects:
+            entry[s] = round(float(row[s]),1) if s in row.index and pd.notna(row[s]) else "—"
+        if "Average" in row.index: entry["Average"] = round(float(row["Average"]),1)
+        if "Grade"   in row.index: entry["Grade"]   = str(row["Grade"])
+        tbl_rows.append(entry)
+    st.dataframe(pd.DataFrame(tbl_rows), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: AI AGENT CHAT
