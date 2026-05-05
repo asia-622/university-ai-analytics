@@ -660,65 +660,126 @@ elif page == "⚖️ Comparison":
 # ═══════════════════════════════════════════════════════════════════════════════
 elif page == "🤖 AI Agent Chat":
     st.markdown("# 🤖 AI Agent Chat")
+
+    # Extra CSS for chat send button visibility
+    st.markdown("""
+    <style>
+    [data-testid="stFormSubmitButton"] button {
+        background: linear-gradient(135deg,#38bdf8,#818cf8) !important;
+        color: #0f172a !important;
+        font-weight: 700 !important;
+        font-size: 1rem !important;
+        border: none !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stFormSubmitButton"] button:hover {
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 20px rgba(56,189,248,.4) !important;
+    }
+    div[data-testid="stTextArea"] textarea {
+        background: #1e293b !important;
+        color: #e2e8f0 !important;
+        border: 1px solid #475569 !important;
+        border-radius: 8px !important;
+        font-size: 0.95rem !important;
+    }
+    </style>""", unsafe_allow_html=True)
+
     if st.session_state["meta"] is None:
         st.warning("⚠️ Please upload a dataset first."); st.stop()
 
+    # Setup agent
     if st.session_state.get("agent"):
-        agent=st.session_state["agent"]
+        agent = st.session_state["agent"]
         if st.session_state.get("api_key") and agent.client is None:
             try:
                 from groq import Groq
-                agent.client=Groq(api_key=st.session_state["api_key"])
+                agent.client = Groq(api_key=st.session_state["api_key"])
             except: pass
     else:
-        agent=UniversityAgent(api_key=st.session_state.get("api_key"))
+        agent = UniversityAgent(api_key=st.session_state.get("api_key"))
         agent.attach_data(st.session_state["meta"],
                           st.session_state.get("rag"),
                           st.session_state.get("ml_model"))
-        st.session_state["agent"]=agent
+        st.session_state["agent"] = agent
 
-    has_key=bool(st.session_state.get("api_key"))
-    clr="#34d399" if has_key else "#fbbf24"
-    txt="🟢 Groq LLaMA Active" if has_key else "🟡 No API key — rule-based mode"
+    # Status bar
+    has_key = bool(st.session_state.get("api_key"))
+    clr = "#34d399" if has_key else "#fbbf24"
+    txt = "🟢 Groq LLaMA Active — AI-powered responses" if has_key else "🟡 Rule-based mode — Add Groq API key for AI responses"
     st.markdown(f"<div style='background:rgba(30,41,59,.8);border:1px solid #334155;"
-                f"border-radius:8px;padding:.6rem 1rem;color:{clr};font-size:.85rem'>{txt}</div>",
+                f"border-radius:8px;padding:.6rem 1rem;color:{clr};"
+                f"font-size:.85rem;margin-bottom:1rem'>{txt}</div>",
                 unsafe_allow_html=True)
 
-    for role,content in st.session_state["chat_history"]:
-        if role=="user":
-            st.markdown(f"<div class='chat-label'>You</div>"
-                        f"<div class='chat-bubble-user'>{content}</div>",
-                        unsafe_allow_html=True)
+    # ── Suggestion chips ──────────────────────────────────────────────────────
+    suggs = [
+        "📊 Summarise the dataset",
+        "🏛️ Which dept has highest marks?",
+        "⚠️ Students with low attendance",
+        "🏆 Top 5 students",
+        "📚 Analyse subjects",
+    ]
+    st.markdown("**Quick questions:**")
+    s_cols = st.columns(len(suggs))
+    for i, s in enumerate(suggs):
+        if s_cols[i].button(s, key=f"sugg_{i}", use_container_width=True):
+            # Directly process suggestion — no rerun needed
+            clean_q = s.split(" ", 1)[1] if s[0] in "📊🏛️⚠️🏆📚" else s
+            st.session_state["chat_history"].append(("user", clean_q))
+            with st.spinner("🤖 Thinking…"):
+                reply = agent.chat(clean_q)
+            st.session_state["chat_history"].append(("assistant", reply))
+            st.rerun()
+
+    st.markdown("---")
+
+    # ── Chat history ──────────────────────────────────────────────────────────
+    for role, content in st.session_state["chat_history"]:
+        if role == "user":
+            st.markdown(
+                f"<div class='chat-label'>YOU</div>"
+                f"<div class='chat-bubble-user'>{content}</div>",
+                unsafe_allow_html=True)
         else:
-            st.markdown(f"<div class='chat-label'>🤖 Agent</div>"
-                        f"<div class='chat-bubble-ai'>{content}</div>",
-                        unsafe_allow_html=True)
+            # Render markdown properly inside chat bubble
+            st.markdown(f"<div class='chat-label'>🤖 AGENT</div>", unsafe_allow_html=True)
+            with st.container():
+                st.markdown(
+                    f"<div class='chat-bubble-ai'>{content}</div>",
+                    unsafe_allow_html=True)
 
-    suggs=["Summarise the dataset","Which dept has highest marks?",
-           "Students with low attendance","Top 5 students","Analyse subjects"]
-    sc=st.columns(len(suggs))
-    for i,s in enumerate(suggs):
-        if sc[i].button(s,key=f"s{i}"):
-            st.session_state["_pm"]=s; st.rerun()
-
-    with st.form("cf",clear_on_submit=True):
-        ui=st.text_area("Message",placeholder="Ask about students, marks, attendance…",
-                        height=80,label_visibility="collapsed",
-                        value=st.session_state.pop("_pm",""))
-        cs,cc=st.columns([3,1])
-        send=cs.form_submit_button("📨 Send",use_container_width=True)
-        clear=cc.form_submit_button("🗑 Clear",use_container_width=True)
+    # ── Input form ────────────────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.form("chat_form", clear_on_submit=True):
+        user_input = st.text_area(
+            "Your message",
+            placeholder="Ask anything — e.g. Who are the top students in CS?",
+            height=90,
+            label_visibility="collapsed",
+        )
+        col_send, col_clear = st.columns([4, 1])
+        send  = col_send.form_submit_button("📨  Send Message", use_container_width=True)
+        clear = col_clear.form_submit_button("🗑️ Clear", use_container_width=True)
 
     if clear:
-        st.session_state["chat_history"]=[]; agent.reset(); st.rerun()
-    if send and ui.strip():
-        st.session_state["chat_history"].append(("user",ui.strip()))
-        with st.spinner("🤖 Thinking…"):
-            reply=agent.chat(ui.strip())
-        st.session_state["chat_history"].append(("assistant",reply))
+        st.session_state["chat_history"] = []
+        agent.reset()
         st.rerun()
 
+    if send and user_input.strip():
+        st.session_state["chat_history"].append(("user", user_input.strip()))
+        with st.spinner("🤖 Thinking…"):
+            reply = agent.chat(user_input.strip())
+        st.session_state["chat_history"].append(("assistant", reply))
+        st.rerun()
+
+    # ── Export ────────────────────────────────────────────────────────────────
     if st.session_state["chat_history"]:
-        txt="\n\n".join(f"{'User' if r=='user' else 'Agent'}: {c}"
-                        for r,c in st.session_state["chat_history"])
-        st.download_button("📥 Export Chat",txt.encode(),"chat.txt","text/plain")
+        st.markdown("<br>", unsafe_allow_html=True)
+        export_txt = "\n\n".join(
+            f"{'You' if r == 'user' else 'Agent'}: {c}"
+            for r, c in st.session_state["chat_history"]
+        )
+        st.download_button("📥 Export Chat", export_txt.encode(),
+                           "chat_history.txt", "text/plain")
