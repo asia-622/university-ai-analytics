@@ -703,14 +703,14 @@ elif page == "🤖 AI Agent Chat":
                           st.session_state.get("ml_model"))
         st.session_state["agent"] = agent
 
-    # Status bar
+    # Status bar — only show when API key IS active
     has_key = bool(st.session_state.get("api_key"))
-    clr = "#34d399" if has_key else "#fbbf24"
-    txt = "🟢 Groq LLaMA Active — AI-powered responses" if has_key else "🟡 Rule-based mode — Add Groq API key for AI responses"
-    st.markdown(f"<div style='background:rgba(30,41,59,.8);border:1px solid #334155;"
-                f"border-radius:8px;padding:.6rem 1rem;color:{clr};"
-                f"font-size:.85rem;margin-bottom:1rem'>{txt}</div>",
-                unsafe_allow_html=True)
+    if has_key:
+        st.markdown(
+            "<div style='background:rgba(30,41,59,.8);border:1px solid #334155;"
+            "border-radius:8px;padding:.6rem 1rem;color:#34d399;"
+            "font-size:.85rem;margin-bottom:1rem'>🟢 Groq LLaMA Active — AI-powered responses</div>",
+            unsafe_allow_html=True)
 
     # ── Suggestion chips ──────────────────────────────────────────────────────
     suggs = [
