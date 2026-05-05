@@ -539,17 +539,29 @@ elif page == "⚖️ Comparison":
     # Also union (all subjects any student has)
     union_subjects  = list(all_subj_sets[0].union(*all_subj_sets[1:]))
 
-    # ── Toggle: common vs all ─────────────────────────────────────────────────
+    # ── Check if same department ──────────────────────────────────────────────
+    if dept_col:
+        depts_sel = [str(comp.iloc[i].get(dept_col,"")) for i in range(len(comp))]
+        same_dept = len(set(depts_sel)) == 1
+    else:
+        same_dept = False
+
+    if not same_dept:
+        st.info(f"ℹ️ Students are from **different departments** — showing all their subjects. "
+                f"Common subjects between them: **{len(common_subjects)}**")
+
+    # ── Toggle: default = All subjects ───────────────────────────────────────
     view_mode = st.radio(
         "Compare subjects:",
-        ["📌 Common subjects only", "📋 All subjects (each student has)"],
-        horizontal=True
+        ["📋 All subjects (each student has)", "📌 Common subjects only"],
+        horizontal=True,
+        index=0
     )
 
     if view_mode == "📌 Common subjects only":
         compare_subjects = sorted(common_subjects)
         if not compare_subjects:
-            st.warning("These students have no subjects in common. Showing all subjects instead.")
+            st.warning("No common subjects found — switching to all subjects.")
             compare_subjects = sorted(union_subjects)
     else:
         compare_subjects = sorted(union_subjects)
@@ -565,9 +577,18 @@ elif page == "⚖️ Comparison":
     colors = px.colors.qualitative.Bold
 
     for i, row in comp.iterrows():
-        lbl    = row["__label__"]
-        values = [float(row[s]) if s in row.index and pd.notna(row[s]) else 0
-                  for s in compare_subjects]
+        values = []
+        text_labels = []
+        for s in compare_subjects:
+            has_subj = s in student_subjects.get(row["__full__"], [])
+            if has_subj and s in row.index and pd.notna(row[s]):
+                v = float(row[s])
+                values.append(v)
+                text_labels.append(f"  {v:.0f}")
+            else:
+                values.append(0)
+                text_labels.append("  —")
+
         fig.add_trace(go.Bar(
             name=row["__full__"],
             x=values,
@@ -575,7 +596,7 @@ elif page == "⚖️ Comparison":
             orientation="h",
             marker_color=colors[i % len(colors)],
             marker_line_width=0,
-            text=[f"{v:.0f}" for v in values],
+            text=text_labels,
             textposition="outside",
             textfont=dict(size=11, color="#e2e8f0"),
         ))
