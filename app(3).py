@@ -271,8 +271,19 @@ elif page == "🏛️ Dept Analysis":
     dept      = st.session_state["sel_dept"]
     dept_df   = df[df[dept_col]==dept].reset_index(drop=True)
 
-    # Get ONLY this dept's subjects
-    if dmap and dept in dmap:
+    # Get ONLY this dept's subjects from long-format mapping
+    df_long       = meta.get("df_long")
+    subj_col_long = meta.get("subject_col_long")
+
+    if df_long is not None and subj_col_long and dept_col:
+        try:
+            # Get subjects actually taught in this department from original data
+            dept_long = df_long[df_long[dept_col].astype(str)==dept]
+            actual    = dept_long[subj_col_long].dropna().unique().tolist()
+            dscols    = [s for s in actual if s in scols]
+        except Exception:
+            dscols = []
+    elif dmap and dept in dmap:
         dscols = [s for s in dmap[dept] if s in scols]
     else:
         dscols = [s for s in scols if dept_df[s].notna().sum()>0 and dept_df[s].mean()>0]
@@ -377,13 +388,43 @@ elif page == "🔍 Student Search":
                 unsafe_allow_html=True)
     st.markdown("---")
 
-    # ── Get ONLY this student's dept subjects ─────────────────────────────────
-    student_dept = str(row.get(dept_col,"")) if dept_col and dept_col in row.index else ""
-    if dmap and student_dept and student_dept in dmap:
-        stu_scols = [s for s in dmap[student_dept] if s in scols]
-    else:
-        stu_scols = [s for s in scols
-                     if s in row.index and pd.notna(row[s]) and float(row[s])>0]
+    # ── Get ONLY this student's ACTUAL subjects from original long data ──────
+    # Best approach: use original long-format data if available
+    df_long       = meta.get("df_long")
+    subj_col_long = meta.get("subject_col_long")
+    marks_col_long= meta.get("marks_col_long")
+    roll_col      = meta.get("roll_col")
+    student_id    = row.get(roll_col) if roll_col and roll_col in row.index else None
+
+    stu_scols = []
+
+    # Method 1: From original long-format data (most accurate)
+    if df_long is not None and subj_col_long and marks_col_long and student_id is not None:
+        try:
+            id_col_long = None
+            for c in df_long.columns:
+                if roll_col and c == roll_col:
+                    id_col_long = c
+                    break
+                if roll_col and roll_col.lower() in c.lower():
+                    id_col_long = c
+                    break
+            if id_col_long:
+                stu_long = df_long[df_long[id_col_long].astype(str)==str(student_id)]
+                actual_subjects = stu_long[subj_col_long].dropna().unique().tolist()
+                stu_scols = [s for s in actual_subjects if s in scols]
+        except Exception:
+            stu_scols = []
+
+    # Method 2: Fallback — only non-NaN, non-zero values for this student
+    if not stu_scols:
+        stu_scols = [
+            s for s in scols
+            if s in row.index
+            and pd.notna(row[s])
+            and str(row[s]) != "nan"
+            and float(row[s]) > 0
+        ]
 
     if not stu_scols:
         st.info("No subject marks found for this student."); st.stop()
