@@ -1,1299 +1,527 @@
 """
-AI University Analytics Agent
-FYP-Level Production Application
-Dark Navy Theme | Professional UI | Correct Data Logic
+app.py — University AI Analytics Agent  (clean rewrite)
 """
-
-import streamlit as st
-import pandas as pd
+from __future__ import annotations
+import io, json, os, re
 import numpy as np
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import anthropic
-import io
-import os
+import streamlit as st
 
-# ─────────────────────────────────────────────
-# PAGE CONFIG
-# ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="UniAnalytics AI",
-    page_icon="🎓",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="University AI Analytics", page_icon="🎓",
+                   layout="wide", initial_sidebar_state="expanded")
 
-# ─────────────────────────────────────────────
-# GLOBAL CSS — DARK NAVY PROFESSIONAL THEME
-# ─────────────────────────────────────────────
 st.markdown("""
 <style>
-/* ── Google Font ── */
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+:root{--bg:#0f172a;--surface:#1e293b;--surface2:#334155;--border:#475569;
+      --text:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;--accent2:#818cf8;
+      --success:#34d399;--warning:#fbbf24;--danger:#f87171;}
+html,body,[data-testid="stApp"]{background:var(--bg)!important;color:var(--text)!important;
+  font-family:'IBM Plex Sans',sans-serif!important;}
+[data-testid="stSidebar"]{background:var(--surface)!important;border-right:1px solid var(--border);}
+[data-testid="stSidebar"] *{color:var(--text)!important;}
+[data-testid="stMetricValue"]{color:var(--accent)!important;font-size:2rem!important;font-weight:700!important;}
+[data-testid="stMetricLabel"]{color:var(--muted)!important;font-size:.8rem!important;text-transform:uppercase;letter-spacing:.1em;}
+h1{color:var(--accent)!important;font-weight:700!important;}
+h2{color:var(--text)!important;font-weight:600!important;}
+h3{color:var(--accent2)!important;font-weight:500!important;}
+.stButton>button{background:linear-gradient(135deg,var(--accent),var(--accent2))!important;
+  color:#0f172a!important;border:none!important;border-radius:8px!important;
+  font-weight:600!important;padding:.5rem 1.5rem!important;}
+.stButton>button:hover{transform:translateY(-1px)!important;box-shadow:0 4px 20px rgba(56,189,248,.35)!important;}
+.stTextInput>div>div>input,.stSelectbox>div>div,.stMultiSelect>div>div{
+  background:var(--surface2)!important;color:var(--text)!important;
+  border:1px solid var(--border)!important;border-radius:8px!important;}
+hr{border-color:var(--border)!important;}
+.stTabs [data-baseweb="tab-list"]{background:var(--surface)!important;border-radius:10px;}
+.stTabs [data-baseweb="tab"]{color:var(--muted)!important;}
+.stTabs [aria-selected="true"]{color:var(--accent)!important;}
+.chat-bubble-user{background:linear-gradient(135deg,var(--accent2),#6366f1);color:#fff;
+  padding:.85rem 1.2rem;border-radius:18px 18px 4px 18px;margin:.4rem 0 .4rem 15%;font-size:.9rem;}
+.chat-bubble-ai{background:var(--surface);border:1px solid var(--border);color:var(--text);
+  padding:.85rem 1.2rem;border-radius:18px 18px 18px 4px;margin:.4rem 15% .4rem 0;font-size:.9rem;}
+.chat-label{font-size:.7rem;color:var(--muted);margin-bottom:.2rem;text-transform:uppercase;letter-spacing:.1em;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+</style>""", unsafe_allow_html=True)
 
-/* ── Root palette ── */
-:root {
-    --bg-primary:   #0B1F3A;
-    --bg-secondary: #0F2850;
-    --bg-card:      #132d58;
-    --bg-hover:     #1a3a6e;
-    --accent-blue:  #3A8DFF;
-    --accent-cyan:  #00D4FF;
-    --accent-teal:  #00C9A7;
-    --accent-purple:#A855F7;
-    --accent-gold:  #F59E0B;
-    --text-primary: #EAEAEA;
-    --text-secondary:#CFCFCF;
-    --text-muted:   #8BA3C7;
-    --border:       #1E3F70;
-    --success:      #10B981;
-    --warning:      #F59E0B;
-    --danger:       #EF4444;
-}
+# ── Imports ───────────────────────────────────────────────────────────────────
+from file_handler       import load_file
+from data_preprocessing import preprocess, get_student_row
+from rag_engine         import RAGEngine, build_chunks
+from chatbot            import UniversityAgent
+from model              import train_model, predict_batch
+import dashboard as dash
+from tools import (get_dataset_summary, get_department_stats,
+                   get_top_students, get_attendance_analysis, get_subject_analysis)
 
-/* ── App background ── */
-.stApp, .main, [data-testid="stAppViewContainer"] {
-    background-color: var(--bg-primary) !important;
-    font-family: 'DM Sans', sans-serif;
-    color: var(--text-primary) !important;
-}
+# ── API key ───────────────────────────────────────────────────────────────────
+def _api_key():
+    try:    return st.secrets["GROQ_API_KEY"]
+    except: return os.environ.get("GROQ_API_KEY","")
 
-/* ── Sidebar ── */
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #091729 0%, #0B1F3A 100%) !important;
-    border-right: 1px solid var(--border);
-}
-[data-testid="stSidebar"] * {
-    color: var(--text-primary) !important;
-}
-[data-testid="stSidebarNav"] { display: none; }
+# ── Session state ─────────────────────────────────────────────────────────────
+for k,v in {"meta":None,"agent":None,"rag":None,"ml_model":None,
+            "chat_history":[],"api_key":_api_key(),"rag_built":False}.items():
+    if k not in st.session_state:
+        st.session_state[k]=v
 
-/* ── Main content area ── */
-[data-testid="stMain"] {
-    background-color: var(--bg-primary) !important;
-}
-.block-container {
-    padding: 1.5rem 2rem 2rem 2rem !important;
-    max-width: 1400px;
-}
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🎓 University Agent")
+    st.markdown("---")
+    page = st.radio("Navigate",
+        ["🏠 Home","📂 Upload & Analyze","📊 Dashboard",
+         "🏛️ Dept Analysis","🔍 Student Search","⚖️ Comparison","🤖 AI Agent Chat"],
+        label_visibility="collapsed")
+    if st.session_state["meta"]:
+        m = st.session_state["meta"]
+        st.markdown("---\n### 📋 Dataset Info")
+        st.markdown(f"- **Students:** {m['n_students']:,}")
+        st.markdown(f"- **Departments:** {m['n_departments']}")
+        st.markdown(f"- **Subjects:** {len(m['subject_cols'])}")
+        if st.session_state["rag_built"]: st.markdown("- ✅ RAG ready")
+        if st.session_state["ml_model"]:
+            st.markdown(f"- ✅ ML R²={st.session_state['ml_model']['metrics']['r2']}")
+    st.markdown("---")
+    st.caption("University AI Analytics v2.0")
 
-/* ── Headers ── */
-h1, h2, h3, h4, h5, h6 {
-    font-family: 'Space Grotesk', sans-serif !important;
-    color: var(--text-primary) !important;
-}
+def _need_data():
+    if st.session_state["meta"] is None:
+        st.warning("⚠️ Please upload a dataset first.")
+        st.stop()
 
-/* ── Metric cards ── */
-[data-testid="metric-container"] {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-    padding: 1rem !important;
-}
-[data-testid="metric-container"] label {
-    color: var(--text-muted) !important;
-    font-size: 0.78rem !important;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-}
-[data-testid="metric-container"] [data-testid="stMetricValue"] {
-    color: var(--accent-cyan) !important;
-    font-family: 'Space Grotesk', sans-serif !important;
-    font-size: 1.8rem !important;
-}
-[data-testid="metric-container"] [data-testid="stMetricDelta"] {
-    color: var(--accent-teal) !important;
-}
+# ── Chart layout helper ───────────────────────────────────────────────────────
+def _layout(**kw):
+    base = dict(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="IBM Plex Sans",color="#e2e8f0",size=13),
+                margin=dict(l=10,r=80,t=55,b=20))
+    base.update(kw); return base
 
-/* ── Buttons ── */
-.stButton > button {
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan)) !important;
-    color: #fff !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-weight: 600 !important;
-    padding: 0.5rem 1.4rem !important;
-    transition: opacity 0.2s ease;
-}
-.stButton > button:hover { opacity: 0.88 !important; }
+def _bar_color(v,mx):
+    p=v/mx if mx else 0
+    return "#34d399" if p>=.80 else "#fbbf24" if p>=.65 else "#fb923c" if p>=.50 else "#f87171"
 
-/* ── Select boxes & inputs ── */
-.stSelectbox > div > div,
-.stMultiSelect > div > div,
-.stTextInput > div > div > input,
-.stTextArea > div > div > textarea {
-    background-color: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
-    color: var(--text-primary) !important;
-    border-radius: 8px !important;
-    font-family: 'DM Sans', sans-serif !important;
-}
-.stSelectbox label, .stTextInput label,
-.stTextArea label, .stMultiSelect label {
-    color: var(--text-secondary) !important;
-    font-weight: 500 !important;
-}
+def _grade_str(avg):
+    if avg>=90: return "A+","#22d3ee"
+    if avg>=80: return "A","#34d399"
+    if avg>=70: return "B","#a3e635"
+    if avg>=60: return "C","#fbbf24"
+    if avg>=50: return "D","#fb923c"
+    return "F","#f87171"
 
-/* ── Dataframes / tables ── */
-[data-testid="stDataFrame"] {
-    border-radius: 10px !important;
-    overflow: hidden;
-    border: 1px solid var(--border) !important;
-}
-.dvn-scroller { background: var(--bg-card) !important; }
-
-/* ── File uploader ── */
-[data-testid="stFileUploader"] {
-    background: var(--bg-card) !important;
-    border: 2px dashed var(--border) !important;
-    border-radius: 12px !important;
-    color: var(--text-secondary) !important;
-}
-
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"] {
-    background: var(--bg-secondary) !important;
-    border-radius: 10px;
-    padding: 4px;
-    gap: 4px;
-}
-.stTabs [data-baseweb="tab"] {
-    background: transparent !important;
-    color: var(--text-muted) !important;
-    border-radius: 7px !important;
-    font-family: 'DM Sans', sans-serif !important;
-    font-weight: 500 !important;
-}
-.stTabs [aria-selected="true"] {
-    background: var(--bg-card) !important;
-    color: var(--accent-cyan) !important;
-}
-
-/* ── Expander ── */
-details {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 10px !important;
-}
-summary { color: var(--text-primary) !important; }
-
-/* ── Divider ── */
-hr { border-color: var(--border) !important; }
-
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--bg-secondary); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-/* ── Chat messages ── */
-[data-testid="stChatMessage"] {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-    color: var(--text-primary) !important;
-}
-.stChatInput > div {
-    background: var(--bg-card) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-}
-.stChatInput textarea { color: var(--text-primary) !important; }
-
-/* ── Custom card HTML ── */
-.uni-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 1.4rem 1.6rem;
-    margin-bottom: 1rem;
-}
-.uni-card-title {
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 0.7rem;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    margin-bottom: 0.3rem;
-}
-.uni-card-value {
-    font-family: 'Space Grotesk', sans-serif;
-    font-size: 2rem;
-    font-weight: 700;
-    color: var(--accent-cyan);
-}
-.uni-card-sub {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    margin-top: 0.2rem;
-}
-.badge {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 999px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-}
-.badge-blue   { background: #1a3a6e; color: #3A8DFF; }
-.badge-cyan   { background: #0e3040; color: #00D4FF; }
-.badge-teal   { background: #0c3030; color: #00C9A7; }
-.badge-purple { background: #2e1a4e; color: #A855F7; }
-.badge-gold   { background: #3d2800; color: #F59E0B; }
-
-/* Streamlit default text overrides */
-p, span, div, li { color: var(--text-primary); }
-.stMarkdown p { color: var(--text-secondary) !important; }
-</style>
-""", unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────
-# PLOTLY THEME HELPER
-# ─────────────────────────────────────────────
-PALETTE = ["#3A8DFF", "#00D4FF", "#00C9A7", "#A855F7", "#F59E0B",
-           "#EF4444", "#10B981", "#F97316", "#EC4899", "#6366F1"]
-
-PLOTLY_LAYOUT = dict(
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(family="DM Sans, sans-serif", color="#CFCFCF", size=13),
-    title_font=dict(family="Space Grotesk, sans-serif", color="#EAEAEA", size=16),
-    legend=dict(
-        bgcolor="rgba(15,40,80,0.7)",
-        bordercolor="#1E3F70",
-        borderwidth=1,
-        font=dict(color="#CFCFCF"),
-    ),
-    xaxis=dict(
-        gridcolor="#1E3F70",
-        linecolor="#1E3F70",
-        tickfont=dict(color="#CFCFCF"),
-        title_font=dict(color="#8BA3C7"),
-        zerolinecolor="#1E3F70",
-    ),
-    yaxis=dict(
-        gridcolor="#1E3F70",
-        linecolor="#1E3F70",
-        tickfont=dict(color="#CFCFCF"),
-        title_font=dict(color="#8BA3C7"),
-        zerolinecolor="#1E3F70",
-    ),
-    margin=dict(l=40, r=30, t=50, b=40),
-)
-
-
-def styled_chart(fig, height=420):
-    fig.update_layout(**PLOTLY_LAYOUT, height=height)
+def _horiz_bar(subjects, values, title, height=None):
+    df_b = pd.DataFrame({"Subject":subjects,"Marks":values}).sort_values("Marks",ascending=True)
+    mx   = max(values) or 100
+    cols = [_bar_color(v,mx) for v in df_b["Marks"]]
+    fig  = go.Figure(go.Bar(
+        x=df_b["Marks"], y=df_b["Subject"], orientation="h",
+        marker_color=cols, marker_line_width=0,
+        text=[f"  {v:.1f}" for v in df_b["Marks"]],
+        textposition="outside", textfont=dict(color="#e2e8f0",size=13)))
+    fig.update_layout(title=title,
+        height=height or max(350,len(subjects)*38+80),
+        xaxis=dict(color="#94a3b8",range=[0,mx*1.22],showgrid=True,
+                   gridcolor="rgba(148,163,184,0.15)"),
+        yaxis=dict(color="#e2e8f0",automargin=True,showgrid=False,tickfont=dict(size=13)),
+        showlegend=False,**_layout())
     return fig
 
-
-# ─────────────────────────────────────────────
-# SAMPLE DATA GENERATOR
-# ─────────────────────────────────────────────
-def generate_sample_data() -> pd.DataFrame:
-    np.random.seed(42)
-    departments = {
-        "Computer Science": {
-            1: ["Programming Fundamentals", "Calculus I", "English Composition", "Digital Logic"],
-            2: ["Object Oriented Programming", "Calculus II", "Discrete Mathematics", "Linear Algebra"],
-            3: ["Data Structures", "Algorithms", "Database Systems", "Statistics"],
-            4: ["Operating Systems", "Computer Networks", "Software Engineering", "AI Fundamentals"],
-        },
-        "Electrical Engineering": {
-            1: ["Circuit Analysis", "Engineering Mathematics", "Physics I", "Workshop Practice"],
-            2: ["Electronics I", "Circuit Theory", "Signals & Systems", "Physics II"],
-            3: ["Digital Electronics", "Electromagnetic Fields", "Control Systems", "Measurements"],
-            4: ["Power Systems", "Microprocessors", "Communication Systems", "VLSI Design"],
-        },
-        "Business Administration": {
-            1: ["Principles of Management", "Business Communication", "Microeconomics", "Accounting I"],
-            2: ["Marketing Fundamentals", "Macroeconomics", "Accounting II", "Business Statistics"],
-            3: ["Financial Management", "Human Resource Management", "Operations Management", "Business Law"],
-            4: ["Strategic Management", "International Business", "Entrepreneurship", "Business Ethics"],
-        },
-        "Mathematics": {
-            1: ["Calculus I", "Linear Algebra I", "Introduction to Proofs", "Statistics I"],
-            2: ["Calculus II", "Linear Algebra II", "Discrete Mathematics", "Statistics II"],
-            3: ["Real Analysis", "Abstract Algebra", "Numerical Methods", "Probability Theory"],
-            4: ["Complex Analysis", "Topology", "Differential Equations", "Mathematical Modeling"],
-        },
-    }
-
-    student_names = [
-        "Ayesha Khan", "Ali Hassan", "Fatima Malik", "Usman Ahmed", "Sana Raza",
-        "Bilal Qureshi", "Zara Hussain", "Omar Sheikh", "Hira Baig", "Tariq Mehmood",
-        "Amna Siddiqui", "Kamran Ali", "Nadia Iqbal", "Asad Butt", "Rabia Tahir",
-        "Hassan Mirza", "Sara Chaudhry", "Imran Javed", "Maria Abbasi", "Faisal Nawaz",
-    ]
-
-    records = []
-    dept_students = {dept: [] for dept in departments}
-    for i, name in enumerate(student_names):
-        dept = list(departments.keys())[i % len(departments)]
-        dept_students[dept].append(name)
-
-    for dept, students in dept_students.items():
-        for student in students:
-            semester = np.random.choice([1, 2, 3, 4])
-            subjects = departments[dept][semester]
-            base_performance = np.random.randint(50, 85)
-            for subject in subjects:
-                marks = int(np.clip(base_performance + np.random.randint(-15, 20), 30, 100))
-                records.append({
-                    "Student_Name": student,
-                    "Department": dept,
-                    "Semester": semester,
-                    "Subject": subject,
-                    "Marks": marks,
-                })
-
-    return pd.DataFrame(records)
-
-
-# ─────────────────────────────────────────────
-# SESSION STATE INIT
-# ─────────────────────────────────────────────
-if "df" not in st.session_state:
-    st.session_state.df = None
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "page" not in st.session_state:
-    st.session_state.page = "Home"
-
-
-# ─────────────────────────────────────────────
-# HELPER UTILITIES
-# ─────────────────────────────────────────────
-def get_df() -> pd.DataFrame | None:
-    return st.session_state.df
-
-
-def grade_label(marks: float) -> str:
-    if marks >= 90: return "A+"
-    elif marks >= 80: return "A"
-    elif marks >= 70: return "B"
-    elif marks >= 60: return "C"
-    elif marks >= 50: return "D"
-    return "F"
-
-
-def grade_color(marks: float) -> str:
-    if marks >= 80: return "badge-teal"
-    elif marks >= 60: return "badge-blue"
-    elif marks >= 50: return "badge-gold"
-    return "badge-purple"
-
-
-def section_header(title: str, subtitle: str = ""):
-    st.markdown(f"""
-    <div style="margin-bottom:1.4rem">
-        <h2 style="
-            font-family:'Space Grotesk',sans-serif;
-            font-size:1.55rem;
-            font-weight:700;
-            color:#EAEAEA;
-            margin:0 0 4px 0;
-            letter-spacing:-0.01em;
-        ">{title}</h2>
-        {'<p style="color:#8BA3C7;font-size:0.9rem;margin:0">'+subtitle+'</p>' if subtitle else ''}
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def stat_card(label: str, value, sub: str = "", col=None):
-    html = f"""
-    <div class="uni-card">
-        <div class="uni-card-title">{label}</div>
-        <div class="uni-card-value">{value}</div>
-        {'<div class="uni-card-sub">'+sub+'</div>' if sub else ''}
-    </div>
-    """
-    if col:
-        col.markdown(html, unsafe_allow_html=True)
-    else:
-        st.markdown(html, unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────
-# SIDEBAR NAVIGATION
-# ─────────────────────────────────────────────
-def sidebar_nav():
-    with st.sidebar:
-        st.markdown("""
-        <div style="padding:1.2rem 0.5rem 1.6rem;border-bottom:1px solid #1E3F70;margin-bottom:1rem">
-            <div style="font-family:'Space Grotesk',sans-serif;font-size:1.25rem;font-weight:700;color:#EAEAEA">
-                🎓 UniAnalytics
-            </div>
-            <div style="font-size:0.75rem;color:#8BA3C7;margin-top:3px">AI University Analytics Agent</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        pages = {
-            "🏠  Home": "Home",
-            "📤  Upload & Analyze": "Upload",
-            "📊  Dashboard": "Dashboard",
-            "🏢  Department-wise Analysis": "Department",
-            "🔍  Student Search": "Student",
-            "⚖️  Comparison": "Comparison",
-            "🤖  AI Agent Chat": "Chat",
-        }
-
-        for label, key in pages.items():
-            active = st.session_state.page == key
-            btn_style = "background:linear-gradient(90deg,#1a3a6e,#132d58);color:#3A8DFF;" if active else ""
-            if st.button(
-                label,
-                key=f"nav_{key}",
-                use_container_width=True,
-            ):
-                st.session_state.page = key
-                st.rerun()
-
-        # Dataset status indicator
-        st.markdown("<br>", unsafe_allow_html=True)
-        df = get_df()
-        if df is not None:
-            st.markdown(f"""
-            <div style="background:#0c3030;border:1px solid #00C9A7;border-radius:9px;padding:0.8rem 1rem">
-                <div style="font-size:0.7rem;color:#00C9A7;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Dataset Loaded</div>
-                <div style="color:#EAEAEA;font-size:0.85rem;margin-top:3px">{len(df):,} records</div>
-                <div style="color:#8BA3C7;font-size:0.75rem">{df['Student_Name'].nunique()} students · {df['Department'].nunique()} departments</div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("""
-            <div style="background:#2e1a0e;border:1px solid #F59E0B;border-radius:9px;padding:0.8rem 1rem">
-                <div style="font-size:0.7rem;color:#F59E0B;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">No Dataset</div>
-                <div style="color:#CFCFCF;font-size:0.8rem;margin-top:3px">Upload a file or load sample data</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: HOME
-# ─────────────────────────────────────────────
-def page_home():
-    st.markdown("""
-    <div style="
-        background:linear-gradient(135deg,#0F2850 0%,#132d58 100%);
-        border:1px solid #1E3F70;
-        border-radius:18px;
-        padding:2.5rem 2.8rem;
-        margin-bottom:2rem;
-    ">
-        <div style="
-            font-family:'Space Grotesk',sans-serif;
-            font-size:2.2rem;
-            font-weight:700;
-            color:#EAEAEA;
-            line-height:1.2;
-            margin-bottom:0.6rem;
-        ">AI University Analytics Agent</div>
-        <div style="color:#8BA3C7;font-size:1rem;max-width:600px;line-height:1.6">
-            A final year project delivering intelligent academic performance insights — 
-            powered by AI, designed for clarity, built for decision-makers.
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+# ═══════════════════════════════════════════════════════════════════════════════
+if page == "🏠 Home":
+    st.markdown("# 🎓 University AI Analytics Agent")
+    st.markdown("### Intelligent academic data analysis — LLM + RAG + Tools")
+    st.markdown("---")
+    c1,c2,c3 = st.columns(3)
+    c1.markdown("**📂 Upload**\n\nCSV / Excel / JSON up to 200MB")
+    c2.markdown("**📊 Analyze**\n\nAuto-detect departments, subjects, attendance")
+    c3.markdown("**🤖 Ask AI**\n\nGroq LLaMA + RAG for natural language Q&A")
 
-    features = [
-        ("📤", "Upload & Analyze", "Import your CSV dataset and instantly validate structure and quality.", "badge-blue"),
-        ("📊", "Dashboard", "High-level KPIs and institution-wide performance overview.", "badge-cyan"),
-        ("🏢", "Department-wise Analysis", "Filter by department, explore top-performing subjects.", "badge-teal"),
-        ("🔍", "Student Search", "Search any student and view their personal subject-wise performance.", "badge-purple"),
-        ("⚖️", "Comparison", "Compare multiple students or departments side by side.", "badge-gold"),
-        ("🤖", "AI Agent Chat", "Ask natural language questions about your academic data.", "badge-blue"),
-    ]
-
-    cols = st.columns(3)
-    for i, (icon, title, desc, badge) in enumerate(features):
-        with cols[i % 3]:
-            st.markdown(f"""
-            <div class="uni-card" style="height:160px">
-                <div style="font-size:1.6rem;margin-bottom:0.5rem">{icon}</div>
-                <div style="font-family:'Space Grotesk',sans-serif;font-size:0.95rem;font-weight:600;color:#EAEAEA;margin-bottom:0.4rem">{title}</div>
-                <div style="font-size:0.8rem;color:#8BA3C7;line-height:1.5">{desc}</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        if st.button("🚀 Load Sample Dataset", use_container_width=True):
-            st.session_state.df = generate_sample_data()
-            st.session_state.page = "Dashboard"
-            st.rerun()
-    with col2:
-        if st.button("📤 Go to Upload Page", use_container_width=True):
-            st.session_state.page = "Upload"
-            st.rerun()
-
-
-# ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: UPLOAD & ANALYZE
-# ─────────────────────────────────────────────
-def page_upload():
-    section_header("Upload & Analyze", "Import your CSV dataset and validate its structure")
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "📂 Upload & Analyze":
+    st.markdown("# 📂 Upload & Analyze")
+    uploaded = st.file_uploader("Upload your university dataset",
+                                type=["csv","xlsx","xls","json"])
+    if uploaded:
+        with st.spinner("Loading & preprocessing…"):
+            raw_df = load_file(uploaded)
+            if raw_df is None: st.stop()
+            meta   = preprocess(raw_df)
+            chunks = build_chunks(meta)
+            rag    = RAGEngine(api_key=st.session_state["api_key"])
+            rag.build(chunks)
+            ml     = train_model(meta)
+            agent  = UniversityAgent(api_key=st.session_state["api_key"])
+            agent.attach_data(meta, rag, ml)
+            st.session_state.update({"meta":meta,"rag":rag,"ml_model":ml,
+                                      "agent":agent,"rag_built":True,"chat_history":[]})
 
-    col1, col2 = st.columns([3, 2])
+        st.success(f"✅ {meta['n_students']:,} students loaded · {len(meta['subject_cols'])} subjects detected")
+        if meta.get("is_long_format"):
+            st.info(f"🔄 Long format detected — auto-pivoted · Subject col: `{meta['subject_col_long']}` · Marks col: `{meta['marks_col_long']}`")
 
-    with col1:
-        uploaded = st.file_uploader(
-            "Upload CSV File",
-            type=["csv"],
-            help="Required columns: Student_Name, Department, Semester, Subject, Marks",
-        )
+        k1,k2,k3,k4 = st.columns(4)
+        k1.metric("Students",   f"{meta['n_students']:,}")
+        k2.metric("Columns",    len(meta["df"].columns))
+        k3.metric("Departments",meta["n_departments"])
+        k4.metric("Subjects",   len(meta["subject_cols"]))
 
-        if uploaded:
-            try:
-                df = pd.read_csv(uploaded)
-                required = {"Student_Name", "Department", "Semester", "Subject", "Marks"}
-                missing = required - set(df.columns)
+        with st.expander("📋 Detected Column Mapping"):
+            for label,key in [("Name","name_col"),("Department","dept_col"),
+                               ("Attendance","attend_col"),("Roll No","roll_col"),
+                               ("Year/Sem","year_col")]:
+                v   = meta.get(key,"—") or "—"
+                clr = "#34d399" if v!="—" else "#f87171"
+                st.markdown(f"**{label}:** <span style='color:{clr}'>{v}</span>",
+                            unsafe_allow_html=True)
 
-                if missing:
-                    st.error(f"❌ Missing columns: {', '.join(missing)}")
-                else:
-                    df["Marks"] = pd.to_numeric(df["Marks"], errors="coerce")
-                    df.dropna(subset=["Marks"], inplace=True)
-                    df["Marks"] = df["Marks"].astype(int).clip(0, 100)
-                    st.session_state.df = df
-                    st.success(f"✅ Dataset loaded successfully — {len(df):,} records")
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
+        st.markdown("### 👀 Data Preview")
+        st.dataframe(meta["df"].head(20), use_container_width=True)
 
-    with col2:
-        st.markdown("""
-        <div class="uni-card">
-            <div class="uni-card-title">Required Columns</div>
-            <div style="margin-top:0.8rem">
-        """, unsafe_allow_html=True)
-        for col, dtype in [
-            ("Student_Name", "Text"),
-            ("Department", "Text"),
-            ("Semester", "Integer (1–8)"),
-            ("Subject", "Text"),
-            ("Marks", "Integer (0–100)"),
-        ]:
-            st.markdown(f"""
-            <div style="display:flex;justify-content:space-between;align-items:center;
-                        padding:6px 0;border-bottom:1px solid #1E3F70">
-                <span style="color:#EAEAEA;font-size:0.85rem"><code style="color:#00D4FF;background:#0e2040;padding:1px 6px;border-radius:4px">{col}</code></span>
-                <span style="color:#8BA3C7;font-size:0.78rem">{dtype}</span>
-            </div>
-            """, unsafe_allow_html=True)
-        st.markdown("</div></div>", unsafe_allow_html=True)
+        c1,c2 = st.columns(2)
+        with c1:
+            st.download_button("📥 Download Cleaned CSV",
+                               meta["df"].to_csv(index=False).encode(),
+                               "cleaned.csv","text/csv")
+        with c2:
+            buf = io.BytesIO()
+            with pd.ExcelWriter(buf,engine="openpyxl") as w:
+                meta["df"].to_excel(w,index=False,sheet_name="Cleaned")
+            st.download_button("📥 Download Excel", buf.getvalue(),
+                               "cleaned.xlsx",
+                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # Sample data
-    st.markdown("<br>", unsafe_allow_html=True)
-    col_a, col_b = st.columns([1, 4])
-    with col_a:
-        if st.button("📋 Load Sample Data", use_container_width=True):
-            st.session_state.df = generate_sample_data()
-            st.rerun()
+    elif st.session_state["meta"]:
+        st.info("✅ Dataset already loaded. Upload a new file to replace it.")
 
-    df = get_df()
-    if df is not None:
-        st.markdown("<br>", unsafe_allow_html=True)
-        section_header("Data Preview", f"{len(df):,} records loaded")
-
-        c1, c2, c3, c4 = st.columns(4)
-        stat_card("Total Records", f"{len(df):,}", col=c1)
-        stat_card("Students", df["Student_Name"].nunique(), col=c2)
-        stat_card("Departments", df["Department"].nunique(), col=c3)
-        stat_card("Avg. Marks", f"{df['Marks'].mean():.1f}", col=c4)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.dataframe(
-            df.head(50).style.background_gradient(subset=["Marks"], cmap="Blues"),
-            use_container_width=True,
-            height=320,
-        )
-
-        # Data quality
-        with st.expander("📋 Data Quality Report"):
-            q1, q2, q3 = st.columns(3)
-            with q1:
-                st.metric("Null Values", df.isnull().sum().sum())
-            with q2:
-                st.metric("Duplicate Rows", df.duplicated().sum())
-            with q3:
-                st.metric("Marks Range", f"{df['Marks'].min()} – {df['Marks'].max()}")
-
-            marks_dist = go.Figure(go.Histogram(
-                x=df["Marks"], nbinsx=20,
-                marker_color="#3A8DFF",
-                marker_line=dict(color="#0B1F3A", width=1),
-            ))
-            marks_dist.update_layout(
-                title="Marks Distribution — Full Dataset",
-                xaxis_title="Marks", yaxis_title="Frequency",
-                **PLOTLY_LAYOUT, height=280,
-            )
-            st.plotly_chart(marks_dist, use_container_width=True)
-
-
-# ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: DASHBOARD
-# ─────────────────────────────────────────────
-def page_dashboard():
-    df = get_df()
-    if df is None:
-        st.warning("⚠️ No dataset loaded. Please upload or load sample data first.")
-        return
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "📊 Dashboard":
+    _need_data()
+    meta    = st.session_state["meta"]
+    summary = get_dataset_summary(meta)
+    st.markdown("# 📊 Analytics Dashboard")
 
-    section_header("Analytics Dashboard", "Institution-wide performance overview")
+    k1,k2,k3,k4,k5 = st.columns(5)
+    k1.metric("👥 Students",     f"{summary['total_students']:,}")
+    k2.metric("🏛️ Departments",  summary["n_departments"])
+    k3.metric("📚 Subjects",     len(summary["subject_columns"]))
+    if "class_average"    in summary: k4.metric("📈 Class Avg",    f"{summary['class_average']:.1f}")
+    if "average_attendance" in summary: k5.metric("✅ Attendance", f"{summary['average_attendance']:.1f}%")
+    st.markdown("---")
 
-    # KPI row
-    avg_marks = df["Marks"].mean()
-    pass_rate = (df["Marks"] >= 50).mean() * 100
-    top_dept = df.groupby("Department")["Marks"].mean().idxmax()
-    total_students = df["Student_Name"].nunique()
+    c1,c2 = st.columns(2)
+    with c1: st.plotly_chart(dash.department_pie(meta),       use_container_width=True)
+    with c2: st.plotly_chart(dash.attendance_histogram(meta), use_container_width=True)
+    c3,c4 = st.columns(2)
+    with c3: st.plotly_chart(dash.dept_marks_bar(meta),       use_container_width=True)
+    with c4: st.plotly_chart(dash.grade_distribution(meta),   use_container_width=True)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Overall Average", f"{avg_marks:.1f}", f"out of 100")
-    c2.metric("Pass Rate", f"{pass_rate:.1f}%", f"+{pass_rate-50:.1f}% above threshold")
-    c3.metric("Total Students", total_students)
-    c4.metric("Top Department", top_dept)
+    if meta.get("dept_col"):
+        st.markdown("### 🏛️ Department Summary")
+        ds = get_department_stats(meta)
+        if "departments" in ds:
+            rows=[{"Department":d,"Students":i["count"],
+                   **({"Avg Marks":i["avg_marks"]} if "avg_marks" in i else {}),
+                   **({"Avg Attendance":i["avg_attendance"]} if "avg_attendance" in i else {})}
+                  for d,i in ds["departments"].items()]
+            st.dataframe(pd.DataFrame(rows).sort_values("Students",ascending=False),
+                         use_container_width=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+# ═══════════════════════════════════════════════════════════════════════════════
+# PAGE: DEPT ANALYSIS  (was Subject Analysis)
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "🏛️ Dept Analysis":
+    _need_data()
+    meta     = st.session_state["meta"]
+    df       = meta["df"]
+    scols    = meta["subject_cols"]
+    dept_col = meta.get("dept_col")
+    dmap     = meta.get("dept_subject_map",{})
 
-    # Row 1: Dept avg + Semester trend
-    col1, col2 = st.columns(2)
+    st.markdown("# 🏛️ Department-wise Subject Analysis")
 
-    with col1:
-        dept_avg = df.groupby("Department")["Marks"].mean().sort_values(ascending=True).reset_index()
-        fig = go.Figure(go.Bar(
-            x=dept_avg["Marks"],
-            y=dept_avg["Department"],
-            orientation="h",
-            marker=dict(
-                color=dept_avg["Marks"],
-                colorscale=[[0, "#3A8DFF"], [0.5, "#00D4FF"], [1, "#00C9A7"]],
-                showscale=False,
-            ),
-            text=dept_avg["Marks"].round(1),
-            textposition="outside",
-            textfont=dict(color="#CFCFCF", size=12),
-        ))
-        fig.update_layout(title="Average Marks by Department", xaxis_title="Average Marks", **PLOTLY_LAYOUT, height=340)
-        st.plotly_chart(fig, use_container_width=True)
+    if not scols:
+        st.error("❌ No subject columns detected."); st.stop()
+    if not dept_col:
+        st.error("❌ No department column detected."); st.stop()
 
-    with col2:
-        sem_avg = df.groupby("Semester")["Marks"].mean().reset_index()
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(
-            x=sem_avg["Semester"], y=sem_avg["Marks"],
-            mode="lines+markers",
-            line=dict(color="#00D4FF", width=3),
-            marker=dict(color="#00D4FF", size=10, line=dict(color="#0B1F3A", width=2)),
-            fill="tozeroy",
-            fillcolor="rgba(0,212,255,0.08)",
-            name="Avg Marks",
-        ))
-        fig2.update_layout(
-            title="Average Marks by Semester",
-            xaxis_title="Semester", yaxis_title="Average Marks",
-            **PLOTLY_LAYOUT, height=340,
-        )
-        st.plotly_chart(fig2, use_container_width=True)
+    dept_list = sorted(df[dept_col].dropna().unique().tolist())
 
-    # Row 2: Grade distribution + Dept student count
-    col3, col4 = st.columns(2)
+    # ── Department buttons ────────────────────────────────────────────────────
+    st.markdown("### Click a Department:")
+    if "sel_dept" not in st.session_state or st.session_state["sel_dept"] not in dept_list:
+        st.session_state["sel_dept"] = dept_list[0]
 
-    with col3:
-        df["Grade"] = df["Marks"].apply(grade_label)
-        grade_counts = df["Grade"].value_counts().reset_index()
-        grade_counts.columns = ["Grade", "Count"]
-        order = ["A+", "A", "B", "C", "D", "F"]
-        grade_counts["Grade"] = pd.Categorical(grade_counts["Grade"], categories=order, ordered=True)
-        grade_counts = grade_counts.sort_values("Grade")
-        fig3 = go.Figure(go.Bar(
-            x=grade_counts["Grade"],
-            y=grade_counts["Count"],
-            marker_color=PALETTE[:len(grade_counts)],
-            text=grade_counts["Count"],
-            textposition="outside",
-            textfont=dict(color="#CFCFCF"),
-        ))
-        fig3.update_layout(title="Grade Distribution (All Records)", xaxis_title="Grade", yaxis_title="Count", **PLOTLY_LAYOUT, height=320)
-        st.plotly_chart(fig3, use_container_width=True)
+    btn_cols = st.columns(len(dept_list))
+    for i,dept in enumerate(dept_list):
+        active = st.session_state["sel_dept"]==dept
+        if btn_cols[i].button(dept, key=f"db_{i}",
+                              type="primary" if active else "secondary",
+                              use_container_width=True):
+            st.session_state["sel_dept"]=dept
 
-    with col4:
-        dept_students = df.groupby("Department")["Student_Name"].nunique().reset_index()
-        dept_students.columns = ["Department", "Students"]
-        fig4 = go.Figure(go.Pie(
-            labels=dept_students["Department"],
-            values=dept_students["Students"],
-            hole=0.5,
-            marker=dict(colors=PALETTE[:len(dept_students)], line=dict(color="#0B1F3A", width=2)),
-            textfont=dict(color="#EAEAEA"),
-        ))
-        fig4.update_layout(title="Students per Department", **PLOTLY_LAYOUT, height=320)
-        st.plotly_chart(fig4, use_container_width=True)
+    dept      = st.session_state["sel_dept"]
+    dept_df   = df[df[dept_col]==dept].reset_index(drop=True)
 
-    # Top & Bottom students
-    st.markdown("<br>", unsafe_allow_html=True)
-    col5, col6 = st.columns(2)
-
-    with col5:
-        st.markdown('<div style="font-family:\'Space Grotesk\',sans-serif;font-size:0.9rem;font-weight:600;color:#00C9A7;margin-bottom:0.5rem">🏆 Top 5 Students (by Average Marks)</div>', unsafe_allow_html=True)
-        top5 = df.groupby("Student_Name")["Marks"].mean().nlargest(5).reset_index()
-        top5.columns = ["Student", "Avg Marks"]
-        top5["Avg Marks"] = top5["Avg Marks"].round(1)
-        top5["Grade"] = top5["Avg Marks"].apply(grade_label)
-        st.dataframe(top5, use_container_width=True, hide_index=True)
-
-    with col6:
-        st.markdown('<div style="font-family:\'Space Grotesk\',sans-serif;font-size:0.9rem;font-weight:600;color:#EF4444;margin-bottom:0.5rem">⚠️ Bottom 5 Students (Need Attention)</div>', unsafe_allow_html=True)
-        bot5 = df.groupby("Student_Name")["Marks"].mean().nsmallest(5).reset_index()
-        bot5.columns = ["Student", "Avg Marks"]
-        bot5["Avg Marks"] = bot5["Avg Marks"].round(1)
-        bot5["Grade"] = bot5["Avg Marks"].apply(grade_label)
-        st.dataframe(bot5, use_container_width=True, hide_index=True)
-
-
-# ─────────────────────────────────────────────
-# PAGE: DEPARTMENT-WISE ANALYSIS
-# ─────────────────────────────────────────────
-def page_department():
-    df = get_df()
-    if df is None:
-        st.warning("⚠️ No dataset loaded.")
-        return
-
-    section_header("Department-wise Analysis", "Explore subject performance filtered by department")
-
-    departments = sorted(df["Department"].unique().tolist())
-
-    col_sel, col_sem = st.columns([2, 2])
-    with col_sel:
-        selected_dept = st.selectbox(
-            "Select Department",
-            departments,
-            index=0,
-            key="dept_select",
-        )
-    with col_sem:
-        semesters = ["All Semesters"] + sorted(df[df["Department"] == selected_dept]["Semester"].unique().tolist())
-        selected_sem = st.selectbox("Filter by Semester", semesters, key="dept_sem")
-
-    # Filter
-    dept_df = df[df["Department"] == selected_dept].copy()
-    if selected_sem != "All Semesters":
-        dept_df = dept_df[dept_df["Semester"] == selected_sem]
-
-    if dept_df.empty:
-        st.info("No data found for the selected filters.")
-        return
-
-    # KPIs
-    st.markdown("<br>", unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Students", dept_df["Student_Name"].nunique())
-    c2.metric("Subjects Offered", dept_df["Subject"].nunique())
-    c3.metric("Avg Marks", f"{dept_df['Marks'].mean():.1f}")
-    c4.metric("Pass Rate", f"{(dept_df['Marks'] >= 50).mean()*100:.1f}%")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Top 5 subjects
-    subj_avg = dept_df.groupby("Subject")["Marks"].mean().sort_values(ascending=False).reset_index()
-    subj_avg.columns = ["Subject", "Average Marks"]
-    subj_avg["Average Marks"] = subj_avg["Average Marks"].round(1)
-
-    top5 = subj_avg.head(5)
-    show_all = st.toggle("Show All Subjects", value=False, key="show_all_subjects")
-    display_df = subj_avg if show_all else top5
-
-    col1, col2 = st.columns([3, 2])
-
-    with col1:
-        fig = go.Figure(go.Bar(
-            x=display_df["Average Marks"],
-            y=display_df["Subject"],
-            orientation="h",
-            marker=dict(
-                color=display_df["Average Marks"],
-                colorscale=[[0, "#3A8DFF"], [0.5, "#00D4FF"], [1, "#00C9A7"]],
-                showscale=False,
-            ),
-            text=display_df["Average Marks"],
-            textposition="outside",
-            textfont=dict(color="#CFCFCF", size=12),
-        ))
-        title_str = f"{'All' if show_all else 'Top 5'} Subjects — {selected_dept}"
-        if selected_sem != "All Semesters":
-            title_str += f" (Semester {selected_sem})"
-        fig.update_layout(
-            title=title_str,
-            xaxis_title="Average Marks",
-            height=max(320, len(display_df) * 44 + 100),
-            **PLOTLY_LAYOUT,
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        st.markdown('<div style="font-family:\'Space Grotesk\',sans-serif;font-size:0.9rem;font-weight:600;color:#EAEAEA;margin-bottom:0.6rem">Subject Rankings</div>', unsafe_allow_html=True)
-        ranked = display_df.copy()
-        ranked.index = range(1, len(ranked) + 1)
-        st.dataframe(ranked, use_container_width=True, height=380)
-
-    # Per-student subject breakdown within dept
-    st.markdown("<br>", unsafe_allow_html=True)
-    section_header("Student Performance in This Department", "Individual subject-wise marks")
-
-    students_in_dept = sorted(dept_df["Student_Name"].unique().tolist())
-    sel_student = st.selectbox("Select Student", students_in_dept, key="dept_student_select")
-
-    student_data = dept_df[dept_df["Student_Name"] == sel_student][["Subject", "Marks", "Semester"]].sort_values("Marks", ascending=False)
-
-    c_tbl, c_bar = st.columns(2)
-    with c_tbl:
-        st.dataframe(student_data, use_container_width=True, hide_index=True)
-    with c_bar:
-        fig_s = go.Figure(go.Bar(
-            x=student_data["Marks"],
-            y=student_data["Subject"],
-            orientation="h",
-            marker_color=PALETTE[:len(student_data)],
-            text=student_data["Marks"],
-            textposition="outside",
-            textfont=dict(color="#CFCFCF"),
-        ))
-        fig_s.update_layout(title=f"{sel_student} — Subject Marks", xaxis_range=[0, 110], **PLOTLY_LAYOUT, height=320)
-        st.plotly_chart(fig_s, use_container_width=True)
-
-
-# ─────────────────────────────────────────────
-# PAGE: STUDENT SEARCH  ← CRITICAL FIX
-# ─────────────────────────────────────────────
-def page_student_search():
-    df = get_df()
-    if df is None:
-        st.warning("⚠️ No dataset loaded.")
-        return
-
-    section_header("Student Search", "Search for a student to view their personal subject-wise performance")
-
-    all_students = sorted(df["Student_Name"].unique().tolist())
-
-    col_search, col_or = st.columns([3, 1])
-    with col_search:
-        search_query = st.text_input("Search Student Name", placeholder="e.g. Ayesha", key="student_search_input")
-    with col_or:
-        st.markdown("<br>", unsafe_allow_html=True)
-
-    # Filter matching names
-    if search_query.strip():
-        matches = [s for s in all_students if search_query.strip().lower() in s.lower()]
+    # Get ONLY this dept's subjects
+    if dmap and dept in dmap:
+        dscols = [s for s in dmap[dept] if s in scols]
     else:
-        matches = all_students
+        dscols = [s for s in scols if dept_df[s].notna().sum()>0 and dept_df[s].mean()>0]
 
-    if not matches:
-        st.info("No students match your search query.")
-        return
+    st.markdown(f"---\n### 📊 **{dept}** — {len(dept_df)} students · {len(dscols)} subjects")
 
-    selected_student = st.selectbox("Select Student", matches, key="student_select_dropdown")
+    k1,k2,k3,k4 = st.columns(4)
+    k1.metric("Students", len(dept_df))
+    if "Average" in dept_df.columns:
+        k2.metric("Avg Marks", f"{dept_df['Average'].mean():.1f}")
+    if meta.get("attend_col") and meta["attend_col"] in dept_df.columns:
+        k3.metric("Avg Attendance", f"{dept_df[meta['attend_col']].mean():.1f}%")
+    if "Grade" in dept_df.columns:
+        k4.metric("Top Grade", dept_df["Grade"].value_counts().index[0])
 
-    # ── CRITICAL: filter ONLY this student's data ──
-    student_df = df[df["Student_Name"] == selected_student].copy()
+    if dscols:
+        avgs = dept_df[dscols].mean()
+        st.plotly_chart(_horiz_bar(avgs.index.tolist(), avgs.values.tolist(),
+                                   f"{dept} — Average Marks per Subject"),
+                        use_container_width=True)
 
-    if student_df.empty:
-        st.info("No records found for this student.")
-        return
+        with st.expander("📋 Subject Stats Table"):
+            tbl=dept_df[dscols].agg(["mean","max","min","std"]).T.round(1)
+            tbl.columns=["Average","Max","Min","Std Dev"]
+            st.dataframe(tbl.sort_values("Average",ascending=False),use_container_width=True)
 
-    # Student overview banner
-    dept = student_df["Department"].iloc[0]
-    semester = student_df["Semester"].iloc[0]
-    avg = student_df["Marks"].mean()
-    grade = grade_label(avg)
+        with st.expander(f"👥 All {len(dept_df)} students in {dept}"):
+            scols_show=[c for c in [meta.get("name_col"),meta.get("roll_col"),
+                        meta.get("year_col"),"Average","Grade"] if c and c in dept_df.columns]
+            st.dataframe(
+                dept_df[scols_show].sort_values("Average",ascending=False)
+                if "Average" in dept_df.columns else dept_df[scols_show],
+                use_container_width=True, height=350)
+            st.download_button(f"📥 Download {dept}",
+                               dept_df.to_csv(index=False).encode(),
+                               f"{dept}.csv","text/csv")
+    else:
+        st.warning("No subjects found for this department.")
 
-    st.markdown(f"""
-    <div style="
-        background:linear-gradient(135deg,#0F2850,#132d58);
-        border:1px solid #1E3F70;
-        border-radius:14px;
-        padding:1.4rem 1.8rem;
-        margin:1rem 0;
-        display:flex;
-        align-items:center;
-        gap:2rem;
-    ">
-        <div style="
-            width:56px;height:56px;border-radius:50%;
-            background:linear-gradient(135deg,#3A8DFF,#00D4FF);
-            display:flex;align-items:center;justify-content:center;
-            font-size:1.5rem;font-weight:700;color:#0B1F3A;
-            font-family:'Space Grotesk',sans-serif;flex-shrink:0;
-        ">{selected_student[0]}</div>
-        <div>
-            <div style="font-family:'Space Grotesk',sans-serif;font-size:1.2rem;font-weight:700;color:#EAEAEA">{selected_student}</div>
-            <div style="color:#8BA3C7;font-size:0.82rem;margin-top:3px">{dept} &nbsp;·&nbsp; Semester {semester}</div>
-        </div>
-        <div style="margin-left:auto;text-align:right">
-            <div style="font-size:2rem;font-weight:700;font-family:'Space Grotesk',sans-serif;color:#00D4FF">{avg:.1f}</div>
-            <div style="color:#8BA3C7;font-size:0.78rem">Overall Average</div>
-        </div>
-        <div style="text-align:center">
-            <div style="font-size:2rem;font-weight:700;font-family:'Space Grotesk',sans-serif;color:#00C9A7">{grade}</div>
-            <div style="color:#8BA3C7;font-size:0.78rem">Grade</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+# ═══════════════════════════════════════════════════════════════════════════════
+# PAGE: STUDENT SEARCH
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "🔍 Student Search":
+    _need_data()
+    meta     = st.session_state["meta"]
+    df       = meta["df"]
+    scols    = meta["subject_cols"]
+    name_col = meta.get("name_col")
+    dept_col = meta.get("dept_col")
+    dmap     = meta.get("dept_subject_map",{})
 
-    # ── ONLY this student's subjects ──
-    # Sort for display
-    subj_df = student_df[["Subject", "Marks"]].sort_values("Marks", ascending=False).reset_index(drop=True)
-    subj_df.index = range(1, len(subj_df) + 1)
-    subj_df["Grade"] = subj_df["Marks"].apply(grade_label)
-    subj_df["Status"] = subj_df["Marks"].apply(lambda m: "Pass ✅" if m >= 50 else "Fail ❌")
+    st.markdown("# 🔍 Student Search & Profile")
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    if not name_col:
+        st.error("❌ No student name column detected."); st.stop()
 
-    tab1, tab2, tab3 = st.tabs(["📋 Subject Table", "📊 Bar Chart", "🥧 Pie Chart"])
+    query = st.text_input("🔎 Enter student name",
+                          placeholder="e.g. Ayesha, Ali, Sara…")
+    if not query:
+        st.info("Type a student name above to see their subject-wise performance.")
+        st.stop()
 
-    with tab1:
-        st.markdown(f'<div style="color:#8BA3C7;font-size:0.82rem;margin-bottom:0.5rem">{selected_student} — {len(subj_df)} subject(s) in Semester {semester}</div>', unsafe_allow_html=True)
-        st.dataframe(subj_df, use_container_width=True)
+    rows = get_student_row(meta, query)
+    if rows.empty:
+        st.warning(f"No student found matching **'{query}'**"); st.stop()
 
-    with tab2:
-        fig_bar = go.Figure(go.Bar(
-            x=subj_df["Subject"],
-            y=subj_df["Marks"],
-            marker=dict(
-                color=subj_df["Marks"],
-                colorscale=[[0, "#3A8DFF"], [0.5, "#00D4FF"], [1, "#00C9A7"]],
-                showscale=False,
-                line=dict(color="#0B1F3A", width=1),
-            ),
-            text=subj_df["Marks"],
-            textposition="outside",
-            textfont=dict(color="#CFCFCF", size=12),
-            hovertemplate="<b>%{x}</b><br>Marks: %{y}<extra></extra>",
-        ))
-        # Pass line
-        fig_bar.add_hline(y=50, line=dict(color="#F59E0B", dash="dot", width=1.5),
-                          annotation_text="Pass Line (50)", annotation_font=dict(color="#F59E0B", size=11))
-        fig_bar.update_layout(
-            title=f"{selected_student} — Subject-wise Marks",
-            xaxis_title="Subject",
-            yaxis_title="Marks",
-            yaxis_range=[0, 115],
-            **PLOTLY_LAYOUT, height=400,
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
+    st.success(f"✅ Found **{len(rows)}** match(es)")
 
-    with tab3:
-        fig_pie = go.Figure(go.Pie(
-            labels=subj_df["Subject"],
-            values=subj_df["Marks"],
-            hole=0.45,
-            marker=dict(
-                colors=PALETTE[:len(subj_df)],
-                line=dict(color="#0B1F3A", width=2),
-            ),
-            textfont=dict(color="#EAEAEA", size=12),
-            hovertemplate="<b>%{label}</b><br>Marks: %{value}<br>Share: %{percent}<extra></extra>",
-        ))
-        fig_pie.update_layout(
-            title=f"{selected_student} — Marks Distribution",
-            **PLOTLY_LAYOUT, height=400,
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
+    # Pick one student if multiple
+    if len(rows)>1:
+        def _lbl(r):
+            lbl=str(r[name_col])
+            if meta.get("roll_col") and meta["roll_col"] in r.index:
+                lbl+=f" | ID:{r[meta['roll_col']]}"
+            if dept_col and dept_col in r.index:
+                lbl+=f" | {r[dept_col]}"
+            if meta.get("year_col") and meta["year_col"] in r.index:
+                lbl+=f" | Sem {r[meta['year_col']]}"
+            return lbl
+        lbls=[_lbl(rows.iloc[i]) for i in range(len(rows))]
+        sel=st.selectbox("Multiple matches — select one:",
+                         range(len(rows)),format_func=lambda i:lbls[i])
+        row=rows.iloc[sel]
+    else:
+        row=rows.iloc[0]
 
-    # Strongest / weakest
-    st.markdown("<br>", unsafe_allow_html=True)
-    col_s, col_w = st.columns(2)
-    strongest = subj_df.iloc[0]
-    weakest = subj_df.iloc[-1]
-    with col_s:
-        st.markdown(f"""
-        <div class="uni-card">
-            <div class="uni-card-title">💪 Strongest Subject</div>
-            <div style="font-size:1.1rem;font-weight:600;color:#EAEAEA;margin:6px 0">{strongest['Subject']}</div>
-            <div class="uni-card-value">{strongest['Marks']}</div>
-            <div class="uni-card-sub">Grade: {strongest['Grade']}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col_w:
-        st.markdown(f"""
-        <div class="uni-card">
-            <div class="uni-card-title">⚠️ Weakest Subject</div>
-            <div style="font-size:1.1rem;font-weight:600;color:#EAEAEA;margin:6px 0">{weakest['Subject']}</div>
-            <div class="uni-card-value" style="color:{'#EF4444' if weakest['Marks'] < 50 else '#F59E0B'}">{weakest['Marks']}</div>
-            <div class="uni-card-sub">Grade: {weakest['Grade']}</div>
-        </div>
-        """, unsafe_allow_html=True)
+    sname = str(row.get(name_col,"?"))
+    avg   = float(row["Average"]) if "Average" in row.index else 0.0
+    g,gc  = _grade_str(avg)
 
+    # ── Profile card ──────────────────────────────────────────────────────────
+    st.markdown(f"### 👤 {sname}")
+    k1,k2,k3,k4 = st.columns(4)
+    if dept_col and dept_col in row.index:
+        k1.metric("Department", str(row[dept_col]))
+    if meta.get("roll_col") and meta["roll_col"] in row.index:
+        k2.metric("Student ID",  str(row[meta["roll_col"]]))
+    if meta.get("year_col") and meta["year_col"] in row.index:
+        k3.metric("Semester",    str(row[meta["year_col"]]))
+    k4.metric("Average", f"{avg:.1f}")
+    st.markdown(f"**Grade:** <span style='color:{gc};font-size:1.5rem;font-weight:700'>{g}</span>",
+                unsafe_allow_html=True)
+    st.markdown("---")
 
-# ─────────────────────────────────────────────
+    # ── Get ONLY this student's dept subjects ─────────────────────────────────
+    student_dept = str(row.get(dept_col,"")) if dept_col and dept_col in row.index else ""
+    if dmap and student_dept and student_dept in dmap:
+        stu_scols = [s for s in dmap[student_dept] if s in scols]
+    else:
+        stu_scols = [s for s in scols
+                     if s in row.index and pd.notna(row[s]) and float(row[s])>0]
+
+    if not stu_scols:
+        st.info("No subject marks found for this student."); st.stop()
+
+    marks = [float(row[s]) for s in stu_scols]
+
+    # ── Horizontal bar chart ──────────────────────────────────────────────────
+    st.plotly_chart(
+        _horiz_bar(stu_scols, marks,
+                   f"📊 {sname} — Subject-wise Marks ({len(stu_scols)} subjects)"),
+        use_container_width=True)
+
+    # ── Pie chart ─────────────────────────────────────────────────────────────
+    fig_pie = go.Figure(go.Pie(
+        labels=stu_scols, values=marks, hole=0.38,
+        textinfo="label+value",
+        textfont=dict(size=12,color="#e2e8f0"),
+        marker=dict(colors=px.colors.qualitative.Bold[:len(stu_scols)],
+                    line=dict(color="#0f172a",width=2)),
+        hovertemplate="<b>%{label}</b><br>Marks: %{value:.0f}<extra></extra>",
+    ))
+    fig_pie.update_layout(
+        title=f"🥧 {sname} — Marks Distribution",
+        height=420,
+        legend=dict(font=dict(color="#cbd5e1",size=11),
+                    bgcolor="rgba(0,0,0,0)",orientation="v"),
+        **_layout(margin=dict(l=10,r=10,t=50,b=20)))
+    st.plotly_chart(fig_pie, use_container_width=True)
+
+    # ── ML prediction ─────────────────────────────────────────────────────────
+    ml = st.session_state.get("ml_model")
+    if ml:
+        try:
+            pred=predict_batch(ml,pd.DataFrame([row])).iloc[0]
+            st.info(f"🤖 ML Predicted **{ml['target_col']}**: **{pred:.2f}** (R²={ml['metrics']['r2']})")
+        except: pass
+
+    st.download_button("📥 Download Profile",
+                       pd.DataFrame([row]).to_csv(index=False).encode(),
+                       f"{sname}_profile.csv","text/csv")
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: COMPARISON
-# ─────────────────────────────────────────────
-def page_comparison():
-    df = get_df()
-    if df is None:
-        st.warning("⚠️ No dataset loaded.")
-        return
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "⚖️ Comparison":
+    _need_data()
+    meta     = st.session_state["meta"]
+    name_col = meta.get("name_col")
+    scols    = meta["subject_cols"]
+    st.markdown("# ⚖️ Student Comparison")
 
-    section_header("Comparison", "Compare students or departments side by side")
+    if not name_col: st.error("❌ No name column."); st.stop()
+    if not scols:    st.error("❌ No subject columns."); st.stop()
 
-    mode = st.radio("Comparison Mode", ["Students", "Departments"], horizontal=True)
+    all_names=meta["df"][name_col].dropna().astype(str).unique().tolist()
+    selected=st.multiselect("Select 2–5 students",all_names,max_selections=5)
+    if len(selected)<2:
+        st.info("Please select at least 2 students."); st.stop()
 
-    if mode == "Students":
-        all_students = sorted(df["Student_Name"].unique().tolist())
-        selected = st.multiselect(
-            "Select Students to Compare (2–5)",
-            all_students,
-            default=all_students[:2],
-            max_selections=5,
-        )
+    rows=[]
+    for n in selected:
+        m=get_student_row(meta,n)
+        if not m.empty:
+            r=m.iloc[0].copy(); r["__name__"]=n; rows.append(r)
+    if len(rows)<2:
+        st.warning("Could not find enough student data."); st.stop()
 
-        if len(selected) < 2:
-            st.info("Please select at least 2 students.")
-            return
+    comp=pd.DataFrame(rows).reset_index(drop=True)
+    st.plotly_chart(dash.comparison_bar(comp,scols),  use_container_width=True)
+    if len(scols)>=3:
+        st.plotly_chart(dash.comparison_radar(comp,scols),use_container_width=True)
+    tbl=comp[["__name__"]+[c for c in scols+["Average"] if c in comp.columns]].rename(columns={"__name__":"Student"})
+    st.dataframe(tbl,use_container_width=True)
 
-        # Build comparison — per-student averages and subject marks
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # Summary table
-        summary_rows = []
-        for name in selected:
-            s_df = df[df["Student_Name"] == name]
-            summary_rows.append({
-                "Student": name,
-                "Department": s_df["Department"].iloc[0],
-                "Semester": s_df["Semester"].iloc[0],
-                "Subjects": s_df["Subject"].nunique(),
-                "Avg Marks": round(s_df["Marks"].mean(), 1),
-                "Highest": s_df["Marks"].max(),
-                "Lowest": s_df["Marks"].min(),
-                "Grade": grade_label(s_df["Marks"].mean()),
-            })
-        summary_df = pd.DataFrame(summary_rows)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
-
-        # Radar / grouped bar
-        with col1:
-            fig = go.Figure()
-            for i, name in enumerate(selected):
-                s_df = df[df["Student_Name"] == name][["Subject", "Marks"]].sort_values("Subject")
-                fig.add_trace(go.Bar(
-                    name=name,
-                    x=s_df["Subject"],
-                    y=s_df["Marks"],
-                    marker_color=PALETTE[i],
-                ))
-            fig.update_layout(
-                title="Subject-wise Marks Comparison",
-                barmode="group",
-                xaxis_title="Subject", yaxis_title="Marks",
-                **PLOTLY_LAYOUT, height=380,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            fig2 = go.Figure()
-            for i, name in enumerate(selected):
-                avg = df[df["Student_Name"] == name]["Marks"].mean()
-                fig2.add_trace(go.Bar(
-                    name=name,
-                    x=[name],
-                    y=[round(avg, 1)],
-                    marker_color=PALETTE[i],
-                    text=[round(avg, 1)],
-                    textposition="outside",
-                    textfont=dict(color="#CFCFCF"),
-                ))
-            fig2.update_layout(
-                title="Overall Average Comparison",
-                yaxis_range=[0, 110],
-                **PLOTLY_LAYOUT, height=380,
-            )
-            st.plotly_chart(fig2, use_container_width=True)
-
-    else:  # Departments
-        all_depts = sorted(df["Department"].unique().tolist())
-        selected_depts = st.multiselect("Select Departments to Compare", all_depts, default=all_depts[:2])
-
-        if len(selected_depts) < 2:
-            st.info("Please select at least 2 departments.")
-            return
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # Summary
-        rows = []
-        for dept in selected_depts:
-            d = df[df["Department"] == dept]
-            rows.append({
-                "Department": dept,
-                "Students": d["Student_Name"].nunique(),
-                "Subjects": d["Subject"].nunique(),
-                "Avg Marks": round(d["Marks"].mean(), 1),
-                "Pass Rate": f"{(d['Marks']>=50).mean()*100:.1f}%",
-                "Top Subject": d.groupby("Subject")["Marks"].mean().idxmax(),
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
-
-        with col1:
-            fig = go.Figure()
-            for i, dept in enumerate(selected_depts):
-                d = df[df["Department"] == dept]
-                sem_avg = d.groupby("Semester")["Marks"].mean().reset_index()
-                fig.add_trace(go.Scatter(
-                    x=sem_avg["Semester"], y=sem_avg["Marks"],
-                    mode="lines+markers",
-                    name=dept,
-                    line=dict(color=PALETTE[i], width=2.5),
-                    marker=dict(size=8),
-                ))
-            fig.update_layout(title="Semester-wise Performance by Department",
-                              xaxis_title="Semester", yaxis_title="Average Marks",
-                              **PLOTLY_LAYOUT, height=360)
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            fig2 = go.Figure()
-            for i, dept in enumerate(selected_depts):
-                d = df[df["Department"] == dept]
-                fig2.add_trace(go.Box(
-                    y=d["Marks"], name=dept,
-                    marker_color=PALETTE[i],
-                    line_color=PALETTE[i],
-                    fillcolor=f"rgba({','.join(str(int(PALETTE[i].lstrip('#')[j:j+2],16)) for j in (0,2,4))},0.15)",
-                ))
-            fig2.update_layout(title="Marks Distribution by Department",
-                               yaxis_title="Marks",
-                               **PLOTLY_LAYOUT, height=360)
-            st.plotly_chart(fig2, use_container_width=True)
-
-
-# ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
 # PAGE: AI AGENT CHAT
-# ─────────────────────────────────────────────
-def page_chat():
-    df = get_df()
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page == "🤖 AI Agent Chat":
+    st.markdown("# 🤖 AI Agent Chat")
+    if st.session_state["meta"] is None:
+        st.warning("⚠️ Please upload a dataset first."); st.stop()
 
-    section_header("AI Agent Chat", "Ask natural language questions about your academic data")
-
-    # Build context summary for the AI
-    if df is not None:
-        data_context = f"""
-You are an AI analytics assistant for a university dataset.
-
-Dataset Summary:
-- Total records: {len(df)}
-- Students: {df['Student_Name'].nunique()}
-- Departments: {', '.join(df['Department'].unique())}
-- Semesters: {sorted(df['Semester'].unique())}
-- Subjects offered: {df['Subject'].nunique()} unique across departments
-- Overall average marks: {df['Marks'].mean():.2f}
-- Pass rate (>=50): {(df['Marks']>=50).mean()*100:.1f}%
-
-Department averages:
-{df.groupby('Department')['Marks'].mean().round(2).to_string()}
-
-Top 5 students by average:
-{df.groupby('Student_Name')['Marks'].mean().nlargest(5).round(2).to_string()}
-
-Answer questions clearly and professionally. Use data from the context above.
-If asked about a specific student, only refer to that student's data.
-"""
+    if st.session_state.get("agent"):
+        agent=st.session_state["agent"]
+        if st.session_state.get("api_key") and agent.client is None:
+            try:
+                from groq import Groq
+                agent.client=Groq(api_key=st.session_state["api_key"])
+            except: pass
     else:
-        data_context = (
-            "You are an AI analytics assistant for a university. "
-            "No dataset is currently loaded. Advise the user to upload or load sample data first."
-        )
+        agent=UniversityAgent(api_key=st.session_state.get("api_key"))
+        agent.attach_data(st.session_state["meta"],
+                          st.session_state.get("rag"),
+                          st.session_state.get("ml_model"))
+        st.session_state["agent"]=agent
 
-    # Display chat history
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    has_key=bool(st.session_state.get("api_key"))
+    clr="#34d399" if has_key else "#fbbf24"
+    txt="🟢 Groq LLaMA Active" if has_key else "🟡 No API key — rule-based mode"
+    st.markdown(f"<div style='background:rgba(30,41,59,.8);border:1px solid #334155;"
+                f"border-radius:8px;padding:.6rem 1rem;color:{clr};font-size:.85rem'>{txt}</div>",
+                unsafe_allow_html=True)
 
-    # Input
-    prompt = st.chat_input("Ask about student performance, department rankings, grades...")
+    for role,content in st.session_state["chat_history"]:
+        if role=="user":
+            st.markdown(f"<div class='chat-label'>You</div>"
+                        f"<div class='chat-bubble-user'>{content}</div>",
+                        unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div class='chat-label'>🤖 Agent</div>"
+                        f"<div class='chat-bubble-ai'>{content}</div>",
+                        unsafe_allow_html=True)
 
-    if prompt:
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    suggs=["Summarise the dataset","Which dept has highest marks?",
+           "Students with low attendance","Top 5 students","Analyse subjects"]
+    sc=st.columns(len(suggs))
+    for i,s in enumerate(suggs):
+        if sc[i].button(s,key=f"s{i}"):
+            st.session_state["_pm"]=s; st.rerun()
 
-        with st.chat_message("assistant"):
-            with st.spinner("Analyzing..."):
-                try:
-                    client = anthropic.Anthropic()
-                    messages_payload = [
-                        {"role": m["role"], "content": m["content"]}
-                        for m in st.session_state.chat_history
-                    ]
-                    response = client.messages.create(
-                        model="claude-opus-4-5",
-                        max_tokens=1024,
-                        system=data_context,
-                        messages=messages_payload,
-                    )
-                    reply = response.content[0].text
-                    st.markdown(reply)
-                    st.session_state.chat_history.append({"role": "assistant", "content": reply})
-                except Exception as e:
-                    err = f"⚠️ AI Agent error: {str(e)}"
-                    st.error(err)
-                    st.session_state.chat_history.append({"role": "assistant", "content": err})
+    with st.form("cf",clear_on_submit=True):
+        ui=st.text_area("Message",placeholder="Ask about students, marks, attendance…",
+                        height=80,label_visibility="collapsed",
+                        value=st.session_state.pop("_pm",""))
+        cs,cc=st.columns([3,1])
+        send=cs.form_submit_button("📨 Send",use_container_width=True)
+        clear=cc.form_submit_button("🗑 Clear",use_container_width=True)
 
-    # Suggested prompts
-    if not st.session_state.chat_history:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<div style="color:#8BA3C7;font-size:0.82rem;margin-bottom:0.6rem">💡 Suggested Questions</div>', unsafe_allow_html=True)
-        suggestions = [
-            "Which department has the highest average marks?",
-            "Who are the top 3 performing students?",
-            "What is the overall pass rate?",
-            "Which semester shows the lowest performance?",
-        ]
-        cols = st.columns(2)
-        for i, s in enumerate(suggestions):
-            with cols[i % 2]:
-                if st.button(s, key=f"sugg_{i}", use_container_width=True):
-                    st.session_state.chat_history.append({"role": "user", "content": s})
-                    st.rerun()
+    if clear:
+        st.session_state["chat_history"]=[]; agent.reset(); st.rerun()
+    if send and ui.strip():
+        st.session_state["chat_history"].append(("user",ui.strip()))
+        with st.spinner("🤖 Thinking…"):
+            reply=agent.chat(ui.strip())
+        st.session_state["chat_history"].append(("assistant",reply))
+        st.rerun()
 
-    # Clear button
-    if st.session_state.chat_history:
-        if st.button("🗑️ Clear Chat History"):
-            st.session_state.chat_history = []
-            st.rerun()
-
-
-# ─────────────────────────────────────────────
-# ROUTER
-# ─────────────────────────────────────────────
-def main():
-    sidebar_nav()
-    page = st.session_state.page
-
-    if page == "Home":
-        page_home()
-    elif page == "Upload":
-        page_upload()
-    elif page == "Dashboard":
-        page_dashboard()
-    elif page == "Department":
-        page_department()
-    elif page == "Student":
-        page_student_search()
-    elif page == "Comparison":
-        page_comparison()
-    elif page == "Chat":
-        page_chat()
-
-
-if __name__ == "__main__":
-    main()
+    if st.session_state["chat_history"]:
+        txt="\n\n".join(f"{'User' if r=='user' else 'Agent'}: {c}"
+                        for r,c in st.session_state["chat_history"])
+        st.download_button("📥 Export Chat",txt.encode(),"chat.txt","text/plain")
